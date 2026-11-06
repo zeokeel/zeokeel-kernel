@@ -451,19 +451,26 @@ func (r *Registry) Has(key PluginKey) bool {
 	return ok
 }
 
-// Delete removes an empty runtime; deleting a non-empty runtime is rejected
-// (returns nil) so live fibers cannot be orphaned.
+// Delete removes the runtime for key and disposes every fiber it hosts,
+// returning the (now-detached) runtime. It returns nil when the key is absent.
+//
+// Cleanup panics are contained per fiber so one broken fiber cannot stop the
+// removal (the Rust reference disposes all fibers, then returns the runtime).
 func (r *Registry) Delete(key PluginKey) *PluginRuntime {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	runtime, ok := r.runtimes[key]
 	if !ok {
-		return nil
-	}
-	if !runtime.IsEmpty() {
+		r.mu.Unlock()
 		return nil
 	}
 	delete(r.runtimes, key)
+	r.mu.Unlock()
+	for _, data := range runtime.snapshot() {
+		containedVoid("cordis::registry", "delete runtime fiber dispose", func() {
+			_ = (&Fiber{data: data}).Dispose()
+		})
+	}
+	r.pruneEmptyRuntimes()
 	return runtime
 }
 

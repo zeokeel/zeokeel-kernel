@@ -782,3 +782,119 @@ func codeOf(err error) cordis.ErrCode {
 	code, _ := cordis.CodeOf(err)
 	return code
 }
+
+func TestConcurrentDisposeAllNoDeadlock(t *testing.T) {
+	root := cordis.Root()
+	defer disposeAllQuietly(root)
+	var cleanups [4]atomic.Int64
+	for i := 0; i < len(cleanups); i++ {
+		i := i
+		if _, err := root.Plugin(&funcPlugin{name: fmt.Sprintf("shutdown-%d", i), activate: func(ctx cordis.Context) error {
+			_, err := ctx.Effect(func() cordis.Effect {
+				return cordis.Effect{cordis.CleanupOf(func() { cleanups[i].Add(1) })}
+			})
+			return err
+		}}, nil); err != nil {
+			t.Fatalf("plugin %d: %v", i, err)
+		}
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errs []error
+	for g := 0; g < 2; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 50; i++ {
+				err := root.DisposeAll()
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}()
+	}
+	close(start)
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("concurrent DisposeAll deadlocked")
+	}
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if code, ok := cordis.CodeOf(err); ok && code == cordis.CodeLifecycleBusy {
+			continue
+		}
+		t.Fatalf("concurrent DisposeAll error = %v", err)
+	}
+	waitFor(t, 2*time.Second, func() bool {
+		_ = root.DisposeAll()
+		return root.Registry().FiberCount() == 0 && root.Registry().Size() == 0 && root.Registry().IsIdle()
+	}, "registry quiescent")
+	for i := range cleanups {
+		if got := cleanups[i].Load(); got != 1 {
+			t.Fatalf("plugin %d cleanup runs = %d, want 1", i, got)
+		}
+	}
+}
+
+func TestFiberReplacePlugin(t *testing.T) {
+	root := cordis.Root()
+	defer disposeAllQuietly(root)
+	oldImpl := &implPlugin{}
+	fiber, err := root.Plugin(oldImpl, nil)
+	if err != nil {
+		t.Fatalf("plugin: %v", err)
+	}
+	id := fiber.ID()
+	newImpl := &implPluginV2{}
+	if err := fiber.ReplacePlugin(newImpl); err != nil {
+		t.Fatalf("replace plugin: %v", err)
+	}
+	if fiber.ID() != id {
+		t.Fatalf("identity changed: %d -> %d", id, fiber.ID())
+	}
+	if fiber.State() != cordis.Active {
+		t.Fatalf("state = %v, want Active", fiber.State())
+	}
+	reg := root.Registry()
+	if reg.Has(cordis.NamedPluginKey("impl")) {
+		t.Fatal("old runtime key still registered after Fiber.ReplacePlugin")
+	}
+	if !reg.Has(cordis.NamedPluginKey("impl-v2")) {
+		t.Fatal("new runtime key missing after Fiber.ReplacePlugin")
+	}
+	if newImpl.applied.Load() != 1 {
+		t.Fatalf("new impl applied = %d, want 1", newImpl.applied.Load())
+	}
+}
+
+func TestProvideCheckedRequiresExplicitRefresh(t *testing.T) {
+	root := cordis.Root()
+	defer disposeAllQuietly(root)
+	var available atomic.Bool
+	key := cordis.NewServiceKey[*int]("manual-gate")
+	value := 1
+	if _, err := cordis.ProvideChecked(root, key, &value, func() bool { return available.Load() }); err != nil {
+		t.Fatalf("provide checked: %v", err)
+	}
+	consumer := &consumerPlugin{injected: []string{key.Name()}}
+	fiber, err := root.Plugin(consumer, nil)
+	if err != nil {
+		t.Fatalf("plugin: %v", err)
+	}
+	if fiber.State() != cordis.Pending {
+		t.Fatalf("state = %v, want Pending", fiber.State())
+	}
+	available.Store(true)
+	root.Refresh()
+	waitFor(t, time.Second, func() bool { return fiber.State() == cordis.Active }, "consumer active after refresh")
+	available.Store(false)
+	root.Refresh()
+	waitFor(t, time.Second, func() bool { return fiber.State() == cordis.Pending }, "consumer pending after refresh")
+}

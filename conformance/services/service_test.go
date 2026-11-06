@@ -611,8 +611,8 @@ type core041Dependent struct {
 	applies int
 }
 
-func (p *core041Dependent) Name() string          { return p.name }
-func (p *core041Dependent) Inject() []string      { return []string{p.key.Name()} }
+func (p *core041Dependent) Name() string     { return p.name }
+func (p *core041Dependent) Inject() []string { return []string{p.key.Name()} }
 func (p *core041Dependent) Activate(ctx cordis.Context, _ cordis.Value) error {
 	value, ok := cordis.Get(ctx, p.key)
 	if !ok {
@@ -704,15 +704,56 @@ func TestCore041_SetClassifiedErrorsKeepOriginalValue(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CORE-041 (part 3): revertible ctx.set. The Rust contract is
-// `set_revertible` returning a Disposer whose disposal restores the previous
-// entry; the Go port only exposes SetNamed (the inverse effect is registered
-// internally but its handle is discarded), so the observable revert contract
-// cannot be exercised through the public API. Reported as a kernel gap.
+// CORE-041 (part 3): revertible ctx.set. SetRevertibleNamed returns a Disposer
+// whose disposal restores the immediately previous entry; writes are
+// single-shot and classified like SetNamed.
 // ---------------------------------------------------------------------------
 
 func TestCore041_SetRevertibleRestoresPreviousEntry(t *testing.T) {
-	t.Skip("KERNEL-GAP CORE-041: set_revertible (semantics.rs:184 set_is_revertible_and_classified) returns a Disposer that restores the previous entry; Go exposes only Context.SetNamed, which drops the inverse Disposer handle, so disposal/restore is not observable via the public API")
+	root := newRoot(t)
+	if _, err := root.SetRevertibleNamed("set.revertible.missing", "x"); err == nil {
+		t.Fatal("SetRevertibleNamed on an unknown service returned nil")
+	}
+
+	key := cordis.NewServiceKey[string]("set.revertible")
+	if _, err := cordis.Provide(root, key, "one"); err != nil {
+		t.Fatalf("provide: %v", err)
+	}
+
+	// Revertible writes are classified too: a wrong type is rejected and the
+	// original value is kept.
+	_, err := root.SetRevertibleNamed("set.revertible", 42)
+	ce := requireCode(t, err, cordis.CodeServiceTypeMismatch)
+	if ce.Name() != "set.revertible" {
+		t.Fatalf("mismatch error name = %q, want %q", ce.Name(), "set.revertible")
+	}
+	if got, ok := cordis.Get(root, key); !ok || got != "one" {
+		t.Fatalf("value after rejected revertible set = %q/%v, want %q", got, ok, "one")
+	}
+
+	// Two nested writes: each inverse restores the immediately previous entry.
+	inverseOne, err := root.SetRevertibleNamed("set.revertible", "two")
+	mustNoError(t, err, "set revertible 2")
+	if got, ok := cordis.Get(root, key); !ok || got != "two" {
+		t.Fatalf("value after revertible set 2 = %q/%v, want %q", got, ok, "two")
+	}
+	inverseTwo, err := root.SetRevertibleNamed("set.revertible", "three")
+	mustNoError(t, err, "set revertible 3")
+	if got, ok := cordis.Get(root, key); !ok || got != "three" {
+		t.Fatalf("value after revertible set 3 = %q/%v, want %q", got, ok, "three")
+	}
+	inverseTwo.Dispose()
+	if got, ok := cordis.Get(root, key); !ok || got != "two" {
+		t.Fatalf("value after undoing set 3 = %q/%v, want %q (restore previous entry)", got, ok, "two")
+	}
+	inverseTwo.Dispose() // single-shot: no duplicate restoration
+	if got, ok := cordis.Get(root, key); !ok || got != "two" {
+		t.Fatalf("value after repeated inverse dispose = %q/%v, want %q", got, ok, "two")
+	}
+	inverseOne.Dispose()
+	if got, ok := cordis.Get(root, key); !ok || got != "one" {
+		t.Fatalf("value after undoing set 2 = %q/%v, want %q", got, ok, "one")
+	}
 }
 
 // ---------------------------------------------------------------------------

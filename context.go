@@ -950,6 +950,7 @@ func (c Context) createFiber(kind pluginKind, config Value, key PluginKey) (*Fib
 		hasRuntime:  true,
 		createEpoch: parentFiber.activatingEpoch.Load(),
 	}
+	data.lastActivityMs.Store(clock.NowMonotonicMs())
 	fiber := &Fiber{data: data}
 	childCtx := c.childWith(data)
 	data.ctx = childCtx.inner
