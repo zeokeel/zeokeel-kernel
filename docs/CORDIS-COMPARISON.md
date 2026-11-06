@@ -142,7 +142,7 @@
 | 热替换 | ❌ 核心（由 HMR 包） | ✅ Registry::replace | ✅ | 额外能力 |
 | 静默/quiescence | 无独立 API（测试/宿主自行 await） | `is_idle/when_idle`（CORE-049） | 同 | Go/Rust 扩展 |
 | 内核边界护栏 | ❌（生态/工程约定） | ✅ tests/kernel_boundary.rs | ✅ internal/archtest（go/parser） | Go/Rust 扩展 |
-| loader / 插件树 | ✅ 生态包：EntryTree、create/update/remove/await/locate、include YAML/JSON、group、hmr | ❌（宿主责任） | ❌ | **最大生态差距** |
+| loader / 插件树 | ✅ 生态包：EntryTree、create/update/remove/await/locate、include YAML/JSON、group、hmr | ❌（宿主责任） | ⚠️ 编译期 `module` 包覆盖子集：typed 注册表 + JSON 装配文件 + diff 热重载 + Update/Reload/Recreate + locate；无动态 ESM/HMR、无 include/group 完整语义 | 非 core 功能；Go 侧按静态链接重新实现（见 [COMPILE-TIME-REGISTRY.md](COMPILE-TIME-REGISTRY.md)） |
 | timer | ✅ @…/plugin-timer（timeout/interval/throttle/debounce，disposal-aware） | ❌ | ❌ | 宿主/工具包责任 |
 | console logger exporter | ✅ 生态包 | `TracingExporter`（宿主 tracing） | `SlogExporter`（宿主 slog） | 对齐思想 |
 | HMR | ✅ 生态包（chokidar/picomatch） | ❌ | ❌ | 宿主责任 |

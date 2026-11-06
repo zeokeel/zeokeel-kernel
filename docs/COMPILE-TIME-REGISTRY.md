@@ -410,14 +410,27 @@ ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志
 
 ### 4.5 与官方 loader 的对应关系
 
-| 官方 `cordis-plugin-loader` | 本原型 |
+| 官方 `cordis-plugin-loader`（生态包，非 core） | 本仓库 `module` 包 |
 | --- | --- |
 | `EntryTree`（id/name/config/group/disabled） | `Entry` 树（ID/Module/Config/Children/Disabled/Optional） |
-| 模块按名 import（ESM） | 编译期 `Registry.Register`（显式 assembly） |
-| `create/update/remove/await/locate` | `Load/Reload/Close/Instances/Locate` |
-| `inject` 覆盖 / context patch | 暂未实现（entry 级 isolate/intercept 是 P1） |
-| include YAML/JSON、group、HMR | 未实现（P1/P2；Go 侧可用配置拆分 + 进程内 reload 近似） |
-| volatile config / `internal/commit` | 未实现（依赖内核 4.1 语义，P2） |
+| 模块按名 import（ESM 运行时） | 编译期 `Registry.Register`（显式 assembly；无动态加载） |
+| `create/update/remove/await/locate` | `Load/ApplyEntries/Reload/Recreate/Close/Instances/Locate` |
+| **配置文件 + include**：`plugin-loader` 从配置树加载，`plugin-include` 支持 YAML/JSON 拆分 | **JSON 装配文件已实现**：`ParseConfig/LoadFile/ApplyFile`（严格 JSON、typed config、diff 热重载）；YAML/TOML 由宿主解析后传 `[]module.Entry`（或未来 Parser hook）；include 拆分未实现 |
+| group（嵌套子模块组） | `Entry.Children` 树（基础嵌套；官方 group 的加载/卸载/配置语义未完全对齐） |
+| HMR（ESM 模块热替换） | **不适用**（编译期路线无代码热更新）；配置/实例热重载已实现（`ApplyFile/WatchFile`） |
+| `await/locate` 完成与定位 | `WhenIdle` 静默校验、`Loader.Locate` |
+| `inject` 覆盖 / `loader/patch-context` | 暂未实现（entry 级 isolate/intercept 是 P1） |
+| volatile config / `internal/commit` | 未实现（依赖内核 4.1 配置语义）；当前用 `Update`（通常不重启）或 `Reload`（状态迁移重建）替代 |
+| 配置变更 `update` 的实例保留 | 官方通过 `internal/update` waterfall + 4.1 `internal/commit`/effectiveConfig 保留实例；本仓库用模块 `Descriptor.Update` 实现同等“原地更新”目标 |
+
+> **结论：没有重复造 core。** 官方把「加载器/配置树/HMR」放在 `cordis-plugin-loader` /
+> `plugin-include` / `plugin-group` / `plugin-hmr` 等独立生态包里，`cordis` core 只做
+> context/fiber/service/events/logger/reflect；Rust 参考也明确把 loader 归为宿主责任。
+> `module` 包在 Go/静态链接路线下承担的是**官方 loader 生态的对应层**，并额外提供官方没有的
+> 编译期类型化清单/预检、required/optional 失败策略与回滚、状态保持 Update/Reload 契约。
+> 真正需要避免的“做重”只有两种：把 loader 功能塞进 core（本仓库没有），或同时维护两套
+> 配置更新机制（将来若把官方 4.1 的 `internal/commit` 语义下沉到内核，应让 module 的
+> `Update` 委托内核 commit，而不是各做一套）。
 
 ---
 
