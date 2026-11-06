@@ -25,6 +25,7 @@
 | [`docs/GO-FEASIBILITY.md`](docs/GO-FEASIBILITY.md) | Rust→Go 逐项语言特性映射、语义差异、风险与缓解、可行性结论 |
 | [`docs/GO-DESIGN.md`](docs/GO-DESIGN.md) | Go 侧设计：包布局、API 约定、并发模型、生命周期实现、已知简化与路线图 |
 | [`docs/analysis/`](docs/analysis/) | 5 份上游源码深度分析笔记（带 `file:line` 引用） |
+| [`docs/CORDIS-COMPARISON.md`](docs/CORDIS-COMPARISON.md) | 与官方 TypeScript Cordis 4.1.0 的特性级对照、「通用内核」目标评估与 Go 侧分层路线（loader/adapter/隔离） |
 
 核心判断（摘要）：
 

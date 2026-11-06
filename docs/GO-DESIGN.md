@@ -2,7 +2,8 @@
 
 > **定位**：三件套第三篇，说明 Go 实现的包布局、公共 API、并发/锁层级、生命周期与异步语义、
 > 与 Rust 的差异、已知简化、测试策略与 CORE→测试映射。可行性论证见
-> [GO-FEASIBILITY.md](GO-FEASIBILITY.md)，Rust 架构见
+> 与官方 TS Cordis 4.1.0 的**特性级对照**与「通用内核」路线见
+> [CORDIS-COMPARISON.md](CORDIS-COMPARISON.md)；可行性见 [GO-FEASIBILITY.md](GO-FEASIBILITY.md)，Rust 架构见
 > [ARCHITECTURE-ANALYSIS.md](ARCHITECTURE-ANALYSIS.md)，逐用例断言见
 > [05-core-cases](analysis/05-core-cases.md)。
 >
