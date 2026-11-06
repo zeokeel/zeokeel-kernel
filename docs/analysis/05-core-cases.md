@@ -1,6 +1,6 @@
 # CORE-001…051 一致性用例断言提取（Go 重实现用）
 
-- 上游基准：`reference/zeokeel-cordis-rust`（zeokeel/zeokeel-cordis v0.6.0），契约定义见 `spec/CORDIS-CORE.md` §4（表格位于 :861-913，逐案散文位于 §2/:140-694）。
+- 上游基准：GitHub [`zeokeel/zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) v0.6.0，契约定义见 `spec/CORDIS-CORE.md` §4（表格位于 :861-913，逐案散文位于 §2/:140-694）。
 - 本文只描述**可观察行为**：`FiberState` 取值 `Pending/Loading/Active/Failed/Unloading/Disposed`（`src/fiber.rs:118`）；行号均为 v0.6.0 的 `fn` 定义行。测试路径省略 `tests/` 前缀，`src/...` 为 crate 内单测。
 - 断言记号：`==` 精确相等；`Some(x)`/`Err(V)` 为 Rust 返回形态，Go 侧分别对应"指针非 nil / error 变体"；`trace==[...]` 表示有序事件序列必须逐项相等。配置值一律用 JSON 语义比较（对象键序无关，`0.2` 为数值）。
 - **ID 对齐提醒**：`tests/executor.rs:1` 文件头把 CORE-034 写成 CORE-033；`src/context.rs:2344` 注释把 CORE-033 写成 CORE-031。以 spec §4 表为准（CORE-033=根图无强引用环，CORE-034=BlockingExecutor）。

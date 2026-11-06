@@ -1,6 +1,6 @@
 # 04 · 运行时层：config / logger / exec / clock / error / L2 supervision / async effects / 内核边界与移植笔记
 
-> 分析对象：`reference/zeokeel-cordis-rust`（zeokeel/zeokeel-cordis **v0.6.0**，Rust 2021，MSRV 1.85）。
+> 分析对象：GitHub [`zeokeel/zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) **v0.6.0**（Rust 2021，MSRV 1.85）。
 > 所有 `file:line` 相对该目录；语义以 `spec/CORDIS-CORE.md` 为准。目标读者：Go 重实现团队。
 > 覆盖 `src/{config,logger,exec,clock,error,lib,l2,async_effects}.rs`、`docs/{CORDIS-RUST,GUIDE,KERNEL-BOUNDARY,KERNEL-ISOLATION}.md`、`examples/*.rs`、CHANGELOG 0.4.2–0.6.0。
 > 关联任务：task-4；本文只做只读分析、不含 Go 实现代码，唯一允许写的文件即本文。

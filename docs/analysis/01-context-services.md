@@ -1,7 +1,7 @@
 # 01 · Context 与 Service 层架构分析（Go 重实现依据）
 
-> 上游：`reference/zeokeel-cordis-rust`（GitHub `zeokeel/zeokeel-cordis` v0.6.0）。
-> 本文行号除特别注明外均指 `reference/zeokeel-cordis-rust/src/*.rs`；规范引用 `spec/CORDIS-CORE.md`、
+> 上游：GitHub [`zeokeel/zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) v0.6.0（Rust）。
+> 本文行号除特别注明外均指上游仓库的相对路径 `src/*.rs`；规范引用 `spec/CORDIS-CORE.md`、
 > `docs/GUIDE.md`、`docs/DESIGN.md`（不变量 I1–I12）。
 > 范围：`context.rs`（2359 行）、`service.rs`（375）、`reflect.rs`（218）、`config.rs`（423），
 > 以及它们依赖的 `registry.rs`/`fiber.rs`/`internal.rs` 的最小接口。

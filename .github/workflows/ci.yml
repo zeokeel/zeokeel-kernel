@@ -31,7 +31,7 @@ jobs:
       - name: gofmt
         run: |
           set -euo pipefail
-          mapfile -t files < <(find . -type f -name '*.go' -not -path './.git/*' -not -path './reference/*' | sort)
+          mapfile -t files < <(find . -type f -name '*.go' -not -path './.git/*' | sort)
           unformatted="$(gofmt -l "${files[@]}")"
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt required for:"; echo "$unformatted"; exit 1

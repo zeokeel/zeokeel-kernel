@@ -11,7 +11,7 @@ section() {
 }
 
 section "gofmt -l (format check)"
-mapfile -t go_files < <(find . -type f -name '*.go' -not -path './.git/*' -not -path './reference/*' | sort)
+mapfile -t go_files < <(find . -type f -name '*.go' -not -path './.git/*' | sort)
 if ((${#go_files[@]} == 0)); then
 	printf 'error: no Go source files found\n' >&2
 	exit 1
