@@ -193,9 +193,9 @@ func (n *GetNext) Next() (ServiceValue, bool) {
 	hook, rest := n.hooks[0], n.hooks[1:]
 	next := &GetNext{hooks: rest, ctx: n.ctx, name: n.name, terminal: n.terminal}
 	type getOutcome struct {
-		value     ServiceValue
-		ok        bool
-		panicked  bool
+		value    ServiceValue
+		ok       bool
+		panicked bool
 	}
 	outcome := func() getOutcome {
 		out := getOutcome{}

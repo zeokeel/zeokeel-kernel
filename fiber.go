@@ -78,9 +78,9 @@ func newEffectNode(label string) *effectNode { return &effectNode{label: label} 
 // diagnostics node. Sync and async effects share one ordered list so unloading
 // keeps a single deterministic reverse-registration order.
 type fiberEffect struct {
-	syncDisp  *Disposer
-	asyncDisp *AsyncDisposer
-	meta      *effectNode
+	syncDisp   *Disposer
+	asyncDisp  *AsyncDisposer
+	meta       *effectNode
 	activation uint64
 	internal   bool
 	ownerChild uint64
@@ -140,17 +140,18 @@ type fiberData struct {
 	effectStack   []*effectNode
 	depVersions   []depVersion
 	children      []*fiberData
+	provided      []string
 	listenerCount int
 
 	clock Clock
 
-	cancelRequested   atomic.Bool
-	disposeRequested  atomic.Bool
-	lastActivityMs    atomic.Int64
-	activationEpoch   atomic.Uint64
-	activatingEpoch   atomic.Uint64
-	statusSeq         atomic.Uint64
-	pendingOps        atomic.Int64
+	cancelRequested  atomic.Bool
+	disposeRequested atomic.Bool
+	lastActivityMs   atomic.Int64
+	activationEpoch  atomic.Uint64
+	activatingEpoch  atomic.Uint64
+	statusSeq        atomic.Uint64
+	pendingOps       atomic.Int64
 
 	lifecycleMu    sync.Mutex
 	lifecycleOwner uint64
@@ -175,6 +176,40 @@ func (rootPlugin) Name() string { return "root" }
 func (rootPlugin) Activate(Context, Value) error { return nil }
 
 // --- basic fiberData helpers ---
+
+// injectSnapshot returns a copy of the fiber's inject declarations.
+func (d *fiberData) injectSnapshot() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.inject...)
+}
+
+// addProvided records a service name provided by this fiber (used to re-mark
+// dependents dirty once the provider becomes Active).
+func (d *fiberData) addProvided(name string) {
+	d.mu.Lock()
+	d.provided = append(d.provided, name)
+	d.mu.Unlock()
+}
+
+// removeProvided forgets a provided service name.
+func (d *fiberData) removeProvided(name string) {
+	d.mu.Lock()
+	for i, existing := range d.provided {
+		if existing == name {
+			d.provided = append(d.provided[:i], d.provided[i+1:]...)
+			break
+		}
+	}
+	d.mu.Unlock()
+}
+
+// providedNamesSnapshot returns a copy of the service names this fiber provides.
+func (d *fiberData) providedNamesSnapshot() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.provided...)
+}
 
 func (d *fiberData) nameSnapshot() string {
 	d.mu.Lock()
@@ -234,10 +269,20 @@ func (d *fiberData) touchActivity() {
 // beginOperation marks a fiber-level in-flight lifecycle operation (activation,
 // unload, restart, update, replace). The returned func ends it.
 func (d *fiberData) beginOperation() func() {
+	d.mu.Lock()
+	registry := d.registry
+	d.mu.Unlock()
 	d.pendingOps.Add(1)
 	return func() {
 		d.pendingOps.Add(-1)
 		d.notifySettle()
+		// Quiescence waiters observe pending_ops dropping to zero; without this
+		// notification a waiter that woke on the last state transition but
+		// re-checked before the operation counter hit zero could park forever
+		// (CORE-049 lost wakeup).
+		if registry != nil {
+			registry.notifyIdle()
+		}
 	}
 }
 
@@ -735,7 +780,6 @@ func drainEffectsAsync(ctx context.Context, effects []*fiberEffect, deferred []*
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	parked = append(parked, deferred...)
 	for i := len(effects) - 1; i >= 0; i-- {
 		effect := effects[i]
 		if effect.syncDisp != nil {
@@ -769,6 +813,27 @@ func drainEffectsAsync(ctx context.Context, effects []*fiberEffect, deferred []*
 					parked = append(parked, remaining.asyncDisp)
 				}
 			}
+			parked = append(parked, deferred...)
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			return firstPanic, firstErr, true, parked
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	// The deferred tail (parked by an earlier cancelled teardown) is drained by
+	// this retry, in registration order.
+	for i, disposer := range deferred {
+		var err error
+		p := callContained(func() { err = disposer.DisposeAsync(ctx) })
+		if p != nil && firstPanic == nil {
+			firstPanic = p
+		}
+		if ctx.Err() != nil {
+			parked = append(parked, disposer)
+			parked = append(parked, deferred[i+1:]...)
 			if firstErr == nil {
 				firstErr = ctx.Err()
 			}
@@ -845,6 +910,9 @@ func (d *fiberData) finishUnload(batch *unloadBatch, target FiberState) {
 	if batch.ctx != nil {
 		batch.ctx.events.removeOwner(d.id)
 	}
+	d.mu.Lock()
+	registry := d.registry
+	d.mu.Unlock()
 	d.transition(target)
 	if target == Disposed {
 		// A self-disposed child must detach its ownership effect from the parent
@@ -855,7 +923,6 @@ func (d *fiberData) finishUnload(batch *unloadBatch, target FiberState) {
 			}
 		}
 		d.mu.Lock()
-		registry := d.registry
 		d.ctx = nil
 		d.parent = nil
 		// Break the fiber→registry→root-fiber cycle so a disposed tree is
@@ -869,46 +936,67 @@ func (d *fiberData) finishUnload(batch *unloadBatch, target FiberState) {
 		}
 	}
 	d.notifySettle()
-	if d.registry != nil {
-		d.registry.notifyIdle()
+	// Always wake quiescence waiters through the captured handle: the fiber's
+	// own registry field may have been cleared above (CORE-049 lost wakeup).
+	if registry != nil {
+		registry.notifyIdle()
 	}
 }
 
-// cascadeDependents unloads every active fiber whose injected services became
-// unsatisfied, transitively, before this fiber's own effects drain (provider
-// withdrawal order, CORE-042; deep chains unload iteratively thanks to Go's
-// growable stacks, a documented simplification of the Rust explicit DFS).
-func (d *fiberData) cascadeDependents(asyncMode bool, ctx context.Context) {
+// cascadeFrame is one dependent fiber whose unload was begun by the cascade.
+type cascadeFrame struct {
+	data  *fiberData
+	batch *unloadBatch
+}
+
+// beginCascade begins the unload of every active fiber whose injected services
+// became unavailable, transitively, in provider-before-dependent order. The
+// caller drains the returned frames in reverse begin order (dependents before
+// providers), matching the Rust two-phase cascade (CORE-042/CORE-047) while
+// keeping the walk iterative and proportional to the affected dependents via the
+// reverse dependency index.
+func (d *fiberData) beginCascade(frontier []string) []cascadeFrame {
 	registry := d.registry
-	if registry == nil {
-		return
+	if registry == nil || len(frontier) == 0 {
+		return nil
 	}
-	bound := registry.FiberCount() + 2
-	for pass := 0; pass < bound; pass++ {
-		progressed := false
-		for _, other := range registry.liveFibers() {
-			if other == d || other.stateSnapshot() != Active {
+	var frames []cascadeFrame
+	visited := map[uint64]struct{}{d.id: {}}
+	for len(frontier) > 0 {
+		candidates := registry.dependentsOfNames(frontier)
+		var next []string
+		for _, other := range candidates {
+			if _, seen := visited[other.id]; seen {
+				continue
+			}
+			visited[other.id] = struct{}{}
+			if other.stateSnapshot() != Active {
 				continue
 			}
 			octx := other.contextRef()
-			if octx == nil {
+			if octx == nil || other.dependenciesSatisfied(*octx) {
 				continue
 			}
-			if other.dependenciesSatisfied(*octx) {
+			batch := other.beginUnload()
+			if batch == nil {
 				continue
 			}
-			octxValue := *octx
-			if !other.unloadForRefresh(octxValue, Pending, asyncMode, ctx) {
-				// The dependent's lifecycle slot is busy; a later refresh/dispose
-				// pass retries it instead of racing the in-flight operation.
-				continue
-			}
-			progressed = true
+			frames = append(frames, cascadeFrame{data: other, batch: batch})
+			next = append(next, batch.withdrew...)
 		}
-		if !progressed {
-			return
-		}
+		frontier = next
 	}
+	return frames
+}
+
+// drainBatch runs one unload batch (sync or async) and returns the first panic,
+// first error, whether the async drain was cancelled, and the deferred tail.
+func drainBatch(asyncMode bool, ctx context.Context, effects []*fiberEffect, deferred []*AsyncDisposer) (firstPanic any, firstErr error, cancelled bool, parked []*AsyncDisposer) {
+	if asyncMode {
+		return drainEffectsAsync(ctx, effects, deferred)
+	}
+	firstPanic, firstErr = drainEffectsBlocking(effects, deferred)
+	return firstPanic, firstErr, false, nil
 }
 
 // unload tears the fiber down to target, cascading transitively-unready
@@ -919,9 +1007,36 @@ func (d *fiberData) unload(target FiberState, asyncMode bool, ctx context.Contex
 	if batch == nil {
 		return nil, nil
 	}
-	// Cascade first: begin provider (already done), unload dependents, then
-	// drain this fiber's own effects.
-	d.cascadeDependents(asyncMode, ctx)
+	// The withdrawal invalidates the dependency edges: mark the names dirty so
+	// the indexed dependents refresh retries busy/skipped dependents later.
+	for _, name := range batch.withdrew {
+		if d.registry != nil {
+			d.registry.noteServiceChanged(name)
+		}
+	}
+	// Two-phase cascade: begin the provider, begin every transitively-unready
+	// dependent (services withdrawn in provider-before-dependent order), then
+	// drain the frames in reverse begin order (dependents before providers) and
+	// finally this fiber. Cleanup panics of dependents are contained.
+	frames := d.beginCascade(batch.withdrew)
+	for i := len(frames) - 1; i >= 0; i-- {
+		frame := frames[i]
+		fp, ferr, _, parked := drainBatch(asyncMode, ctx, frame.batch.effects, frame.batch.deferred)
+		if len(parked) > 0 {
+			frame.data.mu.Lock()
+			frame.data.deferredAsync = append(frame.data.deferredAsync, parked...)
+			frame.data.mu.Unlock()
+		}
+		frame.data.finishUnload(frame.batch, Pending)
+		if fp != nil {
+			slog.Error("dependent cleanup panicked during cascade; contained",
+				"fiber", frame.data.id, "panic", panicText(fp))
+		}
+		if ferr != nil {
+			slog.Error("dependent cleanup failed during cascade; contained",
+				"fiber", frame.data.id, "error", ferr)
+		}
+	}
 	var parked []*AsyncDisposer
 	if asyncMode {
 		firstPanic, err, _, parked = drainEffectsAsync(ctx, batch.effects, batch.deferred)
@@ -934,6 +1049,9 @@ func (d *fiberData) unload(target FiberState, asyncMode bool, ctx context.Contex
 		d.mu.Unlock()
 	}
 	d.finishUnload(batch, target)
+	if d.registry != nil {
+		d.registry.RefreshDependents()
+	}
 	return firstPanic, err
 }
 
@@ -1023,7 +1141,7 @@ func (d *fiberData) activateSync(actx Context) (err error) {
 		}
 		d.setError(verr)
 		d.transition(Failed)
-		actx.Refresh()
+		actx.inner.registry.RefreshDependents()
 		return nil
 	}
 	d.mu.Lock()
@@ -1068,7 +1186,13 @@ func (d *fiberData) activateSync(actx Context) (err error) {
 		}
 		d.recordDepVersions(actx)
 		d.transition(Active)
-		actx.Refresh()
+		// The provider is Active now: re-mark the services it provides dirty so
+		// dependents that were Pending during apply activate in this pass.
+		registry := actx.inner.registry
+		for _, name := range d.providedNamesSnapshot() {
+			registry.noteServiceChanged(name)
+		}
+		registry.RefreshDependents()
 	}
 	return nil
 }
@@ -1113,7 +1237,7 @@ func (d *fiberData) activateAsync(actx Context, ctx context.Context) (err error)
 		}
 		d.setError(verr)
 		d.transition(Failed)
-		actx.Refresh()
+		actx.inner.registry.RefreshDependents()
 		return nil
 	}
 	d.mu.Lock()
@@ -1166,7 +1290,13 @@ func (d *fiberData) activateAsync(actx Context, ctx context.Context) (err error)
 		}
 		d.recordDepVersions(actx)
 		d.transition(Active)
-		actx.Refresh()
+		// The provider is Active now: re-mark the services it provides dirty so
+		// dependents that were Pending during apply activate in this pass.
+		registry := actx.inner.registry
+		for _, name := range d.providedNamesSnapshot() {
+			registry.noteServiceChanged(name)
+		}
+		registry.RefreshDependents()
 	}
 	return nil
 }
@@ -1190,7 +1320,7 @@ func (d *fiberData) failActivation(actx Context, failure error) {
 	if !d.activationInvalidated() {
 		d.transition(Failed)
 	}
-	actx.Refresh()
+	actx.inner.registry.RefreshDependents()
 	if firstPanic != nil {
 		slog.Error("cleanup panicked during failed activation rollback; contained",
 			"panic", panicText(firstPanic))
@@ -1213,7 +1343,7 @@ func (d *fiberData) rollbackActivationToPending(epoch uint64) {
 			"panic", panicText(firstPanic))
 	}
 	if ctx := d.contextRef(); ctx != nil {
-		ctx.Refresh()
+		ctx.inner.registry.RefreshDependents()
 	}
 }
 
@@ -1283,11 +1413,20 @@ func (f *Fiber) ID() uint64 {
 }
 
 // UID returns the registry uid assigned at creation (same as ID in the Go port).
+//
+// A disposed fiber reports no uid, matching the Rust reference's
+// `Fiber::uid() -> Option<u64>` after disposal (CORE-026).
 func (f *Fiber) UID() (uint64, bool) {
-	if d := f.fiberData(); d != nil {
-		return d.uid, true
+	d := f.fiberData()
+	if d == nil {
+		return 0, false
 	}
-	return 0, false
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.state == Disposed {
+		return 0, false
+	}
+	return d.uid, true
 }
 
 // Parent returns the fiber's parent context, if any.
@@ -1311,12 +1450,13 @@ func (f *Fiber) State() FiberState {
 // IsActive reports whether the fiber is Active.
 func (f *Fiber) IsActive() bool { return f.State() == Active }
 
-// AssertActive returns an error when the fiber is not Active.
+// AssertActive returns ErrInactiveEffect when the fiber is not Active
+// (Cordis `fiber.assert_active`).
 func (f *Fiber) AssertActive() error {
 	if f.IsActive() {
 		return nil
 	}
-	return PluginFailedError("fiber is not active: " + f.State().String())
+	return ErrInactiveEffect
 }
 
 // Context returns the fiber's own context (nil after dispose).
@@ -1429,6 +1569,9 @@ func (f *Fiber) AwaitSettled() error {
 		return nil
 	}
 	for {
+		// Capture the settle channel before reading the counter (see the
+		// quiescence loop for the lost-wakeup rationale).
+		ch := d.settleChan()
 		d.mu.Lock()
 		ops := d.pendingOps.Load()
 		state := d.state
@@ -1440,7 +1583,7 @@ func (f *Fiber) AwaitSettled() error {
 			}
 			return nil
 		}
-		<-d.settleChan()
+		<-ch
 	}
 }
 
@@ -1451,6 +1594,7 @@ func (f *Fiber) AwaitSettledContext(ctx context.Context) error {
 		return nil
 	}
 	for {
+		ch := d.settleChan()
 		d.mu.Lock()
 		ops := d.pendingOps.Load()
 		state := d.state
@@ -1462,7 +1606,6 @@ func (f *Fiber) AwaitSettledContext(ctx context.Context) error {
 			}
 			return nil
 		}
-		ch := d.settleChan()
 		select {
 		case <-ch:
 		case <-ctx.Done():

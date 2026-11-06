@@ -291,6 +291,112 @@ func TestCore046_CancelledDisposeAsyncRetryDrainsDeferred(t *testing.T) {
 	assertOrder(t, tr.snapshot(), []string{"older"})
 }
 
+// TestCore046_CancelledTeardownWakesJoiner covers the joiner-release boundary
+// (redteam3_attacks.rs::at31): cancelling the owner must wake a joiner that was
+// waiting on the in-flight teardown; the joiner then retries the restored
+// cleanups and completes the teardown.
+func TestCore046_CancelledTeardownWakesJoiner(t *testing.T) {
+	tr := &trace{}
+	secondStarted := make(chan struct{})
+	var d *cordis.AsyncDisposer
+	d = cordis.NewAsyncDisposer([]cordis.AsyncCleanup{
+		// Restored when the owner is cancelled; only the joiner can retry it.
+		cordis.AsyncCleanupOf(func(context.Context) error {
+			tr.add("restored")
+			return nil
+		}),
+		cordis.AsyncCleanupOf(func(ctx context.Context) error {
+			close(secondStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+	})
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	ownerDone := make(chan error, 1)
+	joinerDone := make(chan error, 1)
+	go func() { ownerDone <- d.DisposeAsync(ownerCtx) }()
+	awaitSignal(t, "in-flight cleanup started", secondStarted)
+	go func() { joinerDone <- d.DisposeAsync(context.Background()) }()
+	expectNoSignal(t, "joiner before owner cancellation", joinerDone, 150*time.Millisecond)
+
+	cancel()
+	if err := awaitChan(t, "cancelled owner DisposeAsync", ownerDone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("owner DisposeAsync = %v, want context.Canceled", err)
+	}
+	// The joiner is woken by the cancelled owner and retries the restored list.
+	if err := awaitChan(t, "joiner after owner cancellation", joinerDone); err != nil {
+		t.Fatalf("joiner DisposeAsync = %v, want nil (it retries the restored cleanups)", err)
+	}
+	if !d.IsDisposed() {
+		t.Fatal("joiner did not complete the restored teardown")
+	}
+	assertOrder(t, tr.snapshot(), []string{"restored"})
+}
+
+// TestCore046_WhenIdleAfterCancelledDisposeDoesNotHang covers F4: a cancelled
+// teardown must not latch the next WhenIdle, and the registry must already be
+// quiescent (the deferred cleanups belong to the disposed fiber handle and are
+// recovered by an explicit retry, per the Go DisposeAsync contract).
+func TestCore046_WhenIdleAfterCancelledDisposeDoesNotHang(t *testing.T) {
+	root := newRoot(t)
+	newestStarted := make(chan struct{})
+	var olderRuns atomic.Int64
+	plugin := &pluginFunc{name: "f4", activate: func(c cordis.Context, _ cordis.Value) error {
+		if _, err := c.EffectAsync(func() cordis.AsyncEffect {
+			return cordis.AsyncEffect{cordis.AsyncCleanupOf(func(context.Context) error {
+				olderRuns.Add(1)
+				return nil
+			})}
+		}); err != nil {
+			return err
+		}
+		_, err := c.EffectAsync(func() cordis.AsyncEffect {
+			return cordis.AsyncEffect{cordis.AsyncCleanupOf(func(ctx context.Context) error {
+				close(newestStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			})}
+		})
+		return err
+	}}
+	fiber, err := root.Plugin(plugin, nil)
+	if err != nil {
+		t.Fatalf("plugin: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- fiber.DisposeAsync(ctx) }()
+	awaitSignal(t, "in-flight cleanup started", newestStarted)
+	cancel()
+	if disposeErr := awaitChan(t, "cancelled dispose", errCh); !errors.Is(disposeErr, context.Canceled) {
+		t.Fatalf("DisposeAsync = %v, want context.Canceled", disposeErr)
+	}
+	if got := olderRuns.Load(); got != 0 {
+		t.Fatalf("deferred cleanup ran during cancellation (runs = %d)", got)
+	}
+
+	// The next WhenIdle must converge promptly and see an idle tree; the
+	// cancelled recovery must not leave a latch behind.
+	idleDone := make(chan struct{})
+	go func() { root.WhenIdle(); close(idleDone) }()
+	awaitSignal(t, "WhenIdle after cancelled dispose (F4: no latch)", idleDone)
+	if !root.Registry().IsIdle() {
+		t.Fatal("registry reports non-idle after WhenIdle returned")
+	}
+	if got := root.Registry().FiberCount(); got != 0 {
+		t.Fatalf("registry fiber_count = %d, want 0", got)
+	}
+
+	// Explicit retry on the retained handle drains the deferred async cleanup.
+	if err := fiber.Dispose(); err != nil {
+		t.Fatalf("retry Dispose: %v", err)
+	}
+	if got := olderRuns.Load(); got != 1 {
+		t.Fatalf("deferred cleanup runs after explicit retry = %d, want 1", got)
+	}
+}
+
 // TestCore046_SelfJoinInCleanup is S-2/R2-1 at the AsyncDisposer layer: a
 // cleanup that awaits its own disposer must return immediately (the outer drain
 // completes the teardown) instead of deadlocking. The drain frame travels in

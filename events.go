@@ -124,12 +124,12 @@ type waterfallEntry[T any] struct {
 // registration order per event name, so SerialAsync interleaves sync and async
 // listeners exactly as they were registered.
 type Events struct {
-	mu                 sync.Mutex
-	listeners          map[string][]*listenerEntry
-	waterfall          map[string][]*waterfallEntry[WaterfallListenerFunc]
-	asyncWaterfall     map[string][]*waterfallEntry[AsyncWaterfallListenerFunc]
-	nextID             atomic.Uint64
-	internal           *InternalBus
+	mu             sync.Mutex
+	listeners      map[string][]*listenerEntry
+	waterfall      map[string][]*waterfallEntry[WaterfallListenerFunc]
+	asyncWaterfall map[string][]*waterfallEntry[AsyncWaterfallListenerFunc]
+	nextID         atomic.Uint64
+	internal       *InternalBus
 }
 
 // NewEvents creates an empty event bus with its own internal hook bus.

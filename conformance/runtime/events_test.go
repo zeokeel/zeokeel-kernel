@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -82,6 +83,36 @@ func TestCore017_AsyncListenerRecycledWithOwner(t *testing.T) {
 	root.ParallelAsync("evt")
 	if got := hits.Load(); got != 1 {
 		t.Fatalf("async listener hits after owner disposal = %d, want 1", got)
+	}
+}
+
+// TestCore017_ListenerRemovedOnActivationRollback covers the second owner
+// recovery path: a failed activation rolls back the listeners it registered
+// (Rust: fail_fiber_* / discard_activation_effects remove_owner).
+func TestCore017_ListenerRemovedOnActivationRollback(t *testing.T) {
+	root := newRoot(t)
+	var hits atomic.Int64
+	fiber, err := root.Plugin(setupPlugin{name: "rollback-owner", setup: func(c cordis.Context) error {
+		if _, err := c.OnAsync("evt", func(context.Context, []cordis.Value) cordis.EventResult {
+			hits.Add(1)
+			return cordis.Continue()
+		}); err != nil {
+			return err
+		}
+		return errors.New("apply failed after registering a listener")
+	}}, nil)
+	if err != nil {
+		t.Fatalf("plugin creation returned %v, want a Failed fiber with nil error", err)
+	}
+	if got := fiber.State(); got != cordis.Failed {
+		t.Fatalf("fiber state = %v, want Failed", got)
+	}
+	if got := root.Events().ListenerCount(); got != 0 {
+		t.Fatalf("listener count after failed activation = %d, want 0 (rolled back)", got)
+	}
+	root.ParallelAsync("evt")
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("rolled-back listener ran %d times, want 0", got)
 	}
 }
 
@@ -347,12 +378,17 @@ func TestCore020_WaterfallOrderAndRewrite(t *testing.T) {
 		t.Fatalf("inner middleware: %v", err)
 	}
 
+	terminalCalls := 0
 	value := root.Waterfall("chain", args, func(termArgs []cordis.Value) cordis.Value {
+		terminalCalls++
 		if !reflect.DeepEqual(termArgs, args) {
 			t.Errorf("terminal got args %v, want %v", termArgs, args)
 		}
 		return "terminal"
 	})
+	if terminalCalls != 1 {
+		t.Fatalf("terminal calls = %d, want 1", terminalCalls)
+	}
 	assertTrace(t, "waterfall onion order", tr.snapshot(),
 		[]string{"outer:in", "inner:in", "inner:out", "outer:out"})
 	assertDeepEqual(t, "waterfall rewritten value", value,
@@ -580,7 +616,7 @@ func TestCore020_WaterfallPanicIsFailClosed(t *testing.T) {
 // recorderPlugin captures the config it was activated with (for config-hook
 // rewrite assertions).
 type recorderPlugin struct {
-	name   string
+	name    string
 	applied []cordis.Value
 }
 

@@ -18,16 +18,16 @@ type Context struct {
 
 // contextInner is the shared state behind a Context handle.
 type contextInner struct {
-	parent   *contextInner
-	fiber    *fiberData
-	isolate  map[string]uint64
+	parent     *contextInner
+	fiber      *fiberData
+	isolate    map[string]uint64
 	intercepts map[string]Value
-	events   *Events
-	registry *Registry
-	logger   *LoggerService
-	store    *serviceStore
-	meta     ContextMeta
-	clock    *clockSlot
+	events     *Events
+	registry   *Registry
+	logger     *LoggerService
+	store      *serviceStore
+	meta       ContextMeta
+	clock      *clockSlot
 
 	accessorMu sync.Mutex
 	accessors  map[string]Accessor
@@ -74,14 +74,14 @@ func Root() Context {
 		settleCh:   nil,
 	}
 	inner := &contextInner{
-		fiber:    rootFiber,
-		isolate:  map[string]uint64{},
-		events:   events,
-		registry: registry,
-		logger:   logger,
-		store:    newServiceStore(),
+		fiber:     rootFiber,
+		isolate:   map[string]uint64{},
+		events:    events,
+		registry:  registry,
+		logger:    logger,
+		store:     newServiceStore(),
 		accessors: map[string]Accessor{},
-		clock:    slot,
+		clock:     slot,
 	}
 	rootFiber.ctx = inner
 	// The root fiber's parent is itself (matches the Rust weak self-link; the Go
@@ -212,16 +212,16 @@ func (c Context) childWithIsolate(isolated map[string]uint64) Context {
 // is not affected.
 func (c Context) Intercept(name string, config Value) Context {
 	return Context{inner: &contextInner{
-		parent:    c.inner,
-		fiber:     c.inner.fiber,
-		isolate:   c.inner.isolate,
+		parent:     c.inner,
+		fiber:      c.inner.fiber,
+		isolate:    c.inner.isolate,
 		intercepts: map[string]Value{name: config},
-		events:    c.inner.events,
-		registry:  c.inner.registry,
-		logger:    c.inner.logger,
-		store:     c.inner.store,
-		accessors: map[string]Accessor{},
-		clock:     c.inner.clock,
+		events:     c.inner.events,
+		registry:   c.inner.registry,
+		logger:     c.inner.logger,
+		store:      c.inner.store,
+		accessors:  map[string]Accessor{},
+		clock:      c.inner.clock,
 	}}
 }
 
@@ -356,14 +356,18 @@ func (c Context) provideUntyped(name string, value ServiceValue, check Availabil
 		storeRef.mu.Lock()
 		delete(storeRef.entries, key)
 		storeRef.mu.Unlock()
+		fiber.removeProvided(name)
 		ctxRef.inner.events.Internal().emitService(ctxRef, name, nil, false)
-		registry.Refresh()
+		registry.noteServiceChanged(name)
+		registry.RefreshDependents()
 	}})
 	if err := fiber.registerSyncEffect(disposer, "ctx.provide", true); err != nil {
 		disposer.Dispose()
 		return nil, err
 	}
-	registry.Refresh()
+	fiber.addProvided(name)
+	registry.noteServiceChanged(name)
+	registry.RefreshDependents()
 	return disposer, nil
 }
 
@@ -513,13 +517,15 @@ func (c Context) setRevertible(name string, value ServiceValue) (*Disposer, erro
 		}
 		store.entries[key] = &previous
 		store.mu.Unlock()
-		registry.Refresh()
+		registry.noteServiceChanged(name)
+		registry.RefreshDependents()
 	}})
 	if err := fiber.registerSyncEffect(inverse, "ctx.set", true); err != nil {
 		inverse.Dispose()
 		return nil, err
 	}
-	registry.Refresh()
+	registry.noteServiceChanged(name)
+	registry.RefreshDependents()
 	_ = ctxRef
 	return inverse, nil
 }
@@ -1005,7 +1011,7 @@ type injectedPlugin struct {
 	callback func(Context) error
 }
 
-func (p injectedPlugin) Name() string   { return "injected" }
+func (p injectedPlugin) Name() string     { return "injected" }
 func (p injectedPlugin) Inject() []string { return p.deps }
 func (p injectedPlugin) Activate(ctx Context, _ Value) error {
 	if p.callback == nil {

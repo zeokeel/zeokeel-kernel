@@ -223,7 +223,7 @@ type schemaCounterPlugin struct {
 	applied atomic.Int32
 }
 
-func (p *schemaCounterPlugin) Name() string                     { return "schema-counter" }
+func (p *schemaCounterPlugin) Name() string                      { return "schema-counter" }
 func (p *schemaCounterPlugin) ConfigSchema() cordis.ConfigSchema { return p.schema }
 func (p *schemaCounterPlugin) Activate(cordis.Context, cordis.Value) error {
 	p.applied.Add(1)
@@ -467,7 +467,7 @@ func TestRegistryDedupesRuntimeAndReclaims(t *testing.T) {
 
 type namedPlugin struct{ name string }
 
-func (p namedPlugin) Name() string                                  { return p.name }
+func (p namedPlugin) Name() string                                { return p.name }
 func (p namedPlugin) Activate(cordis.Context, cordis.Value) error { return nil }
 
 func TestReplaceKeepsFiberIdentity(t *testing.T) {

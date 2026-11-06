@@ -118,7 +118,9 @@ func newServiceStore() *serviceStore {
 func (s *serviceStore) newVersion() uint64 { return s.nextVersion.Add(1) }
 
 // mangle keeps the scope/name pair in one comparable key.
-func storeKey(scope uint64, name string) serviceStoreKey { return serviceStoreKey{scope: scope, name: name} }
+func storeKey(scope uint64, name string) serviceStoreKey {
+	return serviceStoreKey{scope: scope, name: name}
+}
 
 // get returns the entry for key (nil when absent), without evaluating the
 // availability check (callers must not hold the store lock while running user

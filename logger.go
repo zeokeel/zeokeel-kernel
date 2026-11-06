@@ -345,8 +345,8 @@ func (e SlogExporter) Export(record LogRecord) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	fields := make([]any, 0, len(record.Fields)*2+4)
-	fields = append(fields, "seq", record.Seq, "ts_unix_ms", record.TsUnixMs)
+	fields := make([]any, 0, len(record.Fields)*2+6)
+	fields = append(fields, "name", record.Name, "seq", record.Seq, "ts_unix_ms", record.TsUnixMs)
 	for key, value := range record.Fields {
 		fields = append(fields, key, value)
 	}

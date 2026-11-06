@@ -319,8 +319,8 @@ type schemaPlugin struct {
 	schema cordis.ConfigSchema
 }
 
-func (p schemaPlugin) Name() string                  { return "schema" }
-func (p schemaPlugin) ConfigSchema() cordis.ConfigSchema { return p.schema }
+func (p schemaPlugin) Name() string                                { return "schema" }
+func (p schemaPlugin) ConfigSchema() cordis.ConfigSchema           { return p.schema }
 func (p schemaPlugin) Activate(cordis.Context, cordis.Value) error { return nil }
 
 func rootPlugin(t *testing.T, p cordis.Plugin, config cordis.Value) (*cordis.Fiber, error) {
@@ -432,7 +432,7 @@ func TestChildFiberOwnership(t *testing.T) {
 
 type parentPlugin struct{ root cordis.Context }
 
-func (p *parentPlugin) Name() string { return "parent" }
+func (p *parentPlugin) Name() string                                { return "parent" }
 func (p *parentPlugin) Activate(cordis.Context, cordis.Value) error { return nil }
 
 func TestQuiescence(t *testing.T) {

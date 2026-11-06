@@ -210,10 +210,10 @@ func IsCode(err error, code ErrCode) bool {
 // Sentinel errors: the field-less variants, plus code-carrying sentinels that
 // errors.Is can match against any instance of the variant.
 var (
-	ErrInactiveEffect  = &CordisError{code: CodeInactiveEffect}
-	ErrDisposed        = &CordisError{code: CodeDisposed}
-	ErrCancelled       = &CordisError{code: CodeCancelled}
-	ErrLifecycleBusy   = &CordisError{code: CodeLifecycleBusy}
+	ErrInactiveEffect   = &CordisError{code: CodeInactiveEffect}
+	ErrDisposed         = &CordisError{code: CodeDisposed}
+	ErrCancelled        = &CordisError{code: CodeCancelled}
+	ErrLifecycleBusy    = &CordisError{code: CodeLifecycleBusy}
 	ErrDuplicateService = &CordisError{code: CodeDuplicateService}
 )
 

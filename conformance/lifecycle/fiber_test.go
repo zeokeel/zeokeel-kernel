@@ -1414,8 +1414,11 @@ func TestCore047_ChildChurnKeepsBookkeepingBounded(t *testing.T) {
 			t.Fatalf("iteration %d: parent effects = %d, want baseline %d (self-disposed child must detach its ownership effect)", i, got, baseline)
 		}
 	}
-	if got := root.Registry().FiberCount(); got != 1 {
-		t.Fatalf("registry fiber_count = %d, want 1 (the parent)", got)
+	// The parent's own activation loaded one long-lived child, still alive: the
+	// registry holds the parent plus that child (every churned child disposed
+	// itself). Detached ownership effects are what stays bounded.
+	if got := root.Registry().FiberCount(); got != 2 {
+		t.Fatalf("registry fiber_count = %d, want 2 (parent + its live initial child)", got)
 	}
 
 	// Parent disposal is idempotent even after the child already disposed itself.
@@ -1701,21 +1704,24 @@ func TestCore051_ConcurrentDisposeAll(t *testing.T) {
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	errCh := make(chan error, 2)
+	var errsMu sync.Mutex
+	var errs []error
 	for g := 0; g < 2; g++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
 			for i := 0; i < 50; i++ {
-				errCh <- root.DisposeAll()
+				err := root.DisposeAll()
+				errsMu.Lock()
+				errs = append(errs, err)
+				errsMu.Unlock()
 			}
 		}()
 	}
 	close(start)
 	wg.Wait()
-	close(errCh)
-	for err := range errCh {
+	for _, err := range errs {
 		if err == nil {
 			continue
 		}

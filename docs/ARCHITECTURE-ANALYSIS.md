@@ -13,6 +13,18 @@
 
 ---
 
+## 目录
+
+[0 结论](#0-结论速览) · [1 分层](#1-分层与总体结构) · [2 Context](#2-context-层作用域容器) ·
+[3 Service](#3-service-层服务身份与可用性) · [4 Fiber](#4-fiber-层六态状态机与生命周期) ·
+[5 Effect](#5-effect-层时序撤销与取消) · [6 空间可组合性](#6-空间可组合性注入版本与刷新固定点) ·
+[7 事件与 waterfall](#7-事件与-waterfall两条-lane) · [8 Registry](#8-registry运行时拓扑与静默) ·
+[9 异步与取消](#9-异步模型与取消语义) · [10 隔离与 panic](#10-隔离与-panic-遏制边界) ·
+[11 锁纪律](#11-锁纪律与并发不变量) · [12 不变量](#12-十二条不变量) · [13 CORE 映射](#13-core-001051-与实现映射) ·
+[14 Rust 机制](#14-rust-专有机制清单) · [15 结论](#15-交给-go-移植的关键结论)
+
+---
+
 ## 0. 结论速览
 
 1. **两个正交维度**：时间可组合性 = 每个 context 变更加一个逆操作，fiber 持有有序 effect 列表，
@@ -959,7 +971,7 @@ clippy await_holding_lock=deny/mutex_integer=deny（`Cargo.toml:36-58`）；MAX_
 | 029 apply panic 隔离 | `fiber.rs:2141-2196`；`internal.rs:83-102` | catch_unwind+rollback |
 | 030 cleanup panic 不跳过 | `effect.rs:36-58`；`fiber.rs:2446-2500` | 记录 first，drain 后重抛 |
 | 031 listener panic 不中断 dispatch | `events.rs:83-100` | catch→Continue |
-| 032 unsized ServiceKey<dyn Trait> | `service.rs:29-60`；`context.rs:589-618` | ArcWrap+ *_any lane |
+| 032 unsized ServiceKey&lt;dyn Trait&gt; | `service.rs:29-60`；`context.rs:589-618` | ArcWrap+ *_any lane |
 | 033 root 图无强引用环 | `context.rs:178-184,2344-2358`；`fiber.rs:1470-1543` | weak 自引用+weak children |
 | 034 同步 dispose 走 BlockingExecutor | `exec.rs:49-98,202-234`；`fiber.rs:2446-2466` | OnceLock seam |
 | 035 AsyncPlugin *_async 激活/卸载 | `fiber.rs:2219-2345`；`context.rs:1402-1449` | async 入口+AsyncPluginKind |
@@ -1022,7 +1034,8 @@ clippy await_holding_lock=deny/mutex_integer=deny（`Cargo.toml:36-58`）；MAX_
    显式穿过 effect 注册。
 6. **生命周期互斥是 operation token，不是锁**：用 Mutex 串行化会把 Busy 变成阻塞等待；Go 至少要在同一
    goroutine 内识别重入。
-7. **反向依赖索引是性能设施，不是语义来源**：Go v0 可先全量扫描（正确性优先），但要标注复杂度。
+7. **反向依赖索引是性能设施，不是语义来源**：Go 可全量 refresh、cascade 用简化索引；索引只缩小候选，
+   候选仍必须复验依赖状态，且 replace 改变 inject 后要重索引。
 8. **panic 遏制矩阵逐项复刻**：Go recover 只覆盖普通 panic 且只对同 goroutine 有效；跨 goroutine 用户
    回调需自行 defer recover。
 9. **waterfall fail-closed 必须 re-panic**：不能返回 error/零值替代，否则策略失败会变成放行。

@@ -280,18 +280,33 @@ type Registry struct {
 
 	quotaMu sync.Mutex
 	quota   FiberQuota
+
+	// Reverse dependency index (inject name → fiber ids): keeps the unload
+	// cascade proportional to the affected dependents instead of rescanning
+	// every fiber (the Rust reference's S1–S4 index, simplified).
+	depMu     sync.Mutex
+	depIndex  map[string]map[uint64]struct{}
+	fiberDeps map[uint64][]string
+	byID      map[uint64]*fiberData
+	// dirtyServices are service names whose availability/version changed since
+	// the last indexed dependents refresh (the Rust S4 fast path).
+	dirtyServices map[string]struct{}
 }
 
 // NewRegistry creates an empty registry.
 func NewRegistry() *Registry {
 	r := &Registry{
-		runtimes:     make(map[PluginKey]*PluginRuntime),
-		labelScopes:  make(map[string]uint64),
-		regOwners:    make(map[uint64]int),
-		idleCh:       make(chan struct{}),
-		nextID:       atomic.Uint64{},
-		nextScope:    atomic.Uint64{},
-		quota:        FiberQuota{},
+		runtimes:      make(map[PluginKey]*PluginRuntime),
+		labelScopes:   make(map[string]uint64),
+		regOwners:     make(map[uint64]int),
+		depIndex:      make(map[string]map[uint64]struct{}),
+		fiberDeps:     make(map[uint64][]string),
+		byID:          make(map[uint64]*fiberData),
+		dirtyServices: make(map[string]struct{}),
+		idleCh:        make(chan struct{}),
+		nextID:        atomic.Uint64{},
+		nextScope:     atomic.Uint64{},
+		quota:         FiberQuota{},
 	}
 	r.nextScope.Store(1) // scope 0 is the default (unisolated) scope
 	return r
@@ -333,6 +348,11 @@ func (r *Registry) registerFiber(f *fiberData) {
 	r.fibersMu.Lock()
 	r.fibers = append(r.fibers, f)
 	r.fibersMu.Unlock()
+	r.mu.Lock()
+	r.byID[f.id] = f
+	registry := r
+	r.mu.Unlock()
+	registry.reindexFiberDeps(f.id, f.injectSnapshot())
 }
 
 func (r *Registry) removeFiber(id uint64) {
@@ -344,6 +364,10 @@ func (r *Registry) removeFiber(id uint64) {
 		}
 	}
 	r.fibersMu.Unlock()
+	r.mu.Lock()
+	delete(r.byID, id)
+	r.mu.Unlock()
+	r.unindexFiberDeps(id)
 }
 
 func (r *Registry) liveFibers() []*fiberData {
@@ -360,6 +384,200 @@ func (r *Registry) FiberByID(id uint64) (*Fiber, bool) {
 		}
 	}
 	return nil, false
+}
+
+// reindexFiberDeps replaces the inject-name edges of one fiber.
+func (r *Registry) reindexFiberDeps(id uint64, inject []string) {
+	r.depMu.Lock()
+	defer r.depMu.Unlock()
+	if old, ok := r.fiberDeps[id]; ok {
+		for _, name := range old {
+			if set, ok := r.depIndex[name]; ok {
+				delete(set, id)
+				if len(set) == 0 {
+					delete(r.depIndex, name)
+				}
+			}
+		}
+		delete(r.fiberDeps, id)
+	}
+	if len(inject) == 0 {
+		return
+	}
+	r.fiberDeps[id] = append([]string(nil), inject...)
+	for _, name := range inject {
+		set := r.depIndex[name]
+		if set == nil {
+			set = make(map[uint64]struct{})
+			r.depIndex[name] = set
+		}
+		set[id] = struct{}{}
+	}
+}
+
+// unindexFiberDeps removes the inject-name edges of a fiber.
+func (r *Registry) unindexFiberDeps(id uint64) {
+	r.reindexFiberDeps(id, nil)
+}
+
+// dependentsOfNames returns the live fibers that inject any of names.
+func (r *Registry) dependentsOfNames(names []string) []*fiberData {
+	r.depMu.Lock()
+	ids := make(map[uint64]struct{})
+	for _, name := range names {
+		for id := range r.depIndex[name] {
+			ids[id] = struct{}{}
+		}
+	}
+	r.depMu.Unlock()
+	if len(ids) == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	out := make([]*fiberData, 0, len(ids))
+	for id := range ids {
+		if f, ok := r.byID[id]; ok {
+			out = append(out, f)
+		}
+	}
+	r.mu.Unlock()
+	return out
+}
+
+// noteServiceChanged marks a service name dirty for the next indexed dependents
+// refresh (called by provide/set/withdraw paths).
+func (r *Registry) noteServiceChanged(name string) {
+	r.depMu.Lock()
+	r.dirtyServices[name] = struct{}{}
+	r.depMu.Unlock()
+}
+
+// takeDirtyServices drains the dirty service-name set.
+func (r *Registry) takeDirtyServices() []string {
+	r.depMu.Lock()
+	defer r.depMu.Unlock()
+	if len(r.dirtyServices) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(r.dirtyServices))
+	for name := range r.dirtyServices {
+		names = append(names, name)
+	}
+	r.dirtyServices = make(map[string]struct{})
+	return names
+}
+
+// refreshCandidates re-evaluates one fiber (used by the indexed dependents
+// refresh). It reports whether a state change was attempted.
+func (r *Registry) refreshCandidate(data *fiberData) bool {
+	actx := data.contextRef()
+	if actx == nil {
+		return false
+	}
+	switch data.stateSnapshot() {
+	case Active:
+		if data.dependenciesSatisfied(*actx) {
+			return false
+		}
+		unchanged := data.unloadForRefresh(*actx, Pending, false, nil)
+		if !unchanged {
+			return false
+		}
+		// A version change (ctx.set / provider swap) leaves the dependency
+		// available: reactivate the dependent in the same pass instead of
+		// leaving it Pending until an unrelated refresh (CORE-041).
+		if reactx := data.contextRef(); reactx != nil &&
+			data.stateSnapshot() == Pending && data.dependenciesReady(*reactx) {
+			data.activateByKind(*reactx, false, nil)
+		}
+		return true
+	case Pending:
+		if !data.dependenciesReady(*actx) {
+			return false
+		}
+		return data.activateByKind(*actx, false, nil)
+	}
+	return false
+}
+
+// RefreshDependents re-evaluates only the fibers affected by service changes
+// (indexed fast path). It coalesces re-entrant calls through a dirty flag and
+// keeps going until no candidate changed, so a dependency chain settles in one
+// caller even when it is long.
+func (r *Registry) RefreshDependents() {
+	if !r.refreshMu.TryLock() {
+		r.refreshDirty.Store(true)
+		return
+	}
+	defer r.refreshMu.Unlock()
+	limit := r.FiberCount()*2 + 64
+	for pass := 0; pass < limit; pass++ {
+		r.refreshDirty.Store(false)
+		names := r.takeDirtyServices()
+		if len(names) == 0 {
+			if r.refreshDirty.Load() {
+				continue
+			}
+			return
+		}
+		changed := false
+		for _, candidate := range r.dependentsOfNames(names) {
+			if r.refreshCandidate(candidate) {
+				changed = true
+			}
+		}
+		if !changed && !r.refreshDirty.Load() {
+			return
+		}
+	}
+}
+
+// refreshDependentsAsync is the async counterpart used by async activation and
+// unload paths.
+func (r *Registry) refreshDependentsAsync(ctx context.Context) {
+	if !r.refreshMu.TryLock() {
+		r.refreshDirty.Store(true)
+		return
+	}
+	defer r.refreshMu.Unlock()
+	limit := r.FiberCount()*2 + 64
+	for pass := 0; pass < limit; pass++ {
+		r.refreshDirty.Store(false)
+		names := r.takeDirtyServices()
+		if len(names) == 0 {
+			if r.refreshDirty.Load() {
+				continue
+			}
+			return
+		}
+		changed := false
+		for _, candidate := range r.dependentsOfNames(names) {
+			actx := candidate.contextRef()
+			if actx == nil {
+				continue
+			}
+			switch candidate.stateSnapshot() {
+			case Active:
+				if !candidate.dependenciesSatisfied(*actx) {
+					if candidate.unloadForRefresh(*actx, Pending, true, ctx) {
+						changed = true
+						if reactx := candidate.contextRef(); reactx != nil &&
+							candidate.stateSnapshot() == Pending && candidate.dependenciesReady(*reactx) {
+							candidate.activateByKind(*reactx, true, ctx)
+						}
+					}
+				}
+			case Pending:
+				if candidate.dependenciesReady(*actx) {
+					candidate.activateByKind(*actx, true, ctx)
+					changed = true
+				}
+			}
+		}
+		if !changed && !r.refreshDirty.Load() {
+			return
+		}
+	}
 }
 
 // --- runtime registration ---
@@ -450,6 +668,10 @@ func (r *Registry) Has(key PluginKey) bool {
 	_, ok := r.Get(key)
 	return ok
 }
+
+// fmtCache formats diagnostics without a package-level fmt import dependency in
+// the hot paths (it is only used on rollback error construction).
+func fmtCache(format string, args ...any) string { return fmt.Sprintf(format, args...) }
 
 // Delete removes the runtime for key and disposes every fiber it hosts,
 // returning the (now-detached) runtime. It returns nil when the key is absent.
@@ -579,12 +801,16 @@ func (r *Registry) WhenIdleContext(ctx context.Context) error {
 			default:
 			}
 		}
-		if r.isIdleExcluding(r.registrationCountFor(goid)) {
-			return nil
-		}
+		// Capture the wake-up channel *before* checking the condition, so a
+		// notify that happens between the check and the wait is either visible in
+		// the state or wakes the captured (already closed) channel. Checking
+		// first and capturing afterwards loses wakeups.
 		r.idleMu.Lock()
 		ch := r.idleCh
 		r.idleMu.Unlock()
+		if r.isIdleExcluding(r.registrationCountFor(goid)) {
+			return nil
+		}
 		if ctx == nil {
 			<-ch
 			continue
@@ -762,11 +988,22 @@ func (r *Registry) Replace(old PluginKey, newPlugin Plugin) ([]*Fiber, error) {
 	for _, data := range fibers {
 		handle := &Fiber{data: data}
 		if err := handle.Restart(); err != nil {
-			// Roll the already-reloaded fibers and the binding back.
-			for _, done := range reloaded {
-				_ = done.Restart()
-			}
+			// Roll the binding back first, then reload every fiber that had
+			// already been switched so the previous implementation is running
+			// again (CORE-048 atomic rollback; XT-05 lifecycle rejection).
 			undoBind()
+			var rollbackErr error
+			// Only fibers that were already reloaded with the new implementation
+			// need a reload back; the rejecting fiber never started its reload
+			// and its metadata was restored by undoBind.
+			for _, done := range reloaded {
+				if rbErr := done.Restart(); rbErr != nil && rollbackErr == nil {
+					rollbackErr = rbErr
+				}
+			}
+			if rollbackErr != nil {
+				return nil, RollbackError(fmtCache("original: %v; rollback: %v", err, rollbackErr))
+			}
 			return nil, err
 		}
 		reloaded = append(reloaded, handle)
@@ -788,10 +1025,16 @@ func (r *Registry) ReplaceAsync(ctx context.Context, old PluginKey, newPlugin As
 	for _, data := range fibers {
 		handle := &Fiber{data: data}
 		if err := handle.RestartAsync(ctx); err != nil {
-			for _, done := range reloaded {
-				_ = done.RestartAsync(ctx)
-			}
 			undoBind()
+			var rollbackErr error
+			for _, done := range reloaded {
+				if rbErr := done.RestartAsync(ctx); rbErr != nil && rollbackErr == nil {
+					rollbackErr = rbErr
+				}
+			}
+			if rollbackErr != nil {
+				return nil, RollbackError(fmtCache("original: %v; rollback: %v", err, rollbackErr))
+			}
 			return nil, err
 		}
 		reloaded = append(reloaded, handle)
@@ -917,5 +1160,5 @@ func (r *Registry) Quota() FiberQuota {
 
 func (r *Registry) quotaLimits() FiberQuota { return r.Quota() }
 
-var _ = fmt.Sprintf
+var _ = fmtCache
 var _ = weak.Make[contextInner]
