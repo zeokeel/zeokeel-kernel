@@ -1176,6 +1176,3 @@ func (r *Registry) Quota() FiberQuota {
 }
 
 func (r *Registry) quotaLimits() FiberQuota { return r.Quota() }
-
-var _ = fmtCache
-var _ = weak.Make[contextInner]

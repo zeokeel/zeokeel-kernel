@@ -2,7 +2,6 @@ package cordis
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"sync"
 )
@@ -1395,5 +1394,3 @@ func (d *fiberData) liveListenerCount() int {
 	}
 	return count
 }
-
-var _ = errors.Is
