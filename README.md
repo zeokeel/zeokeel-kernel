@@ -25,7 +25,8 @@
 | [`docs/GO-FEASIBILITY.md`](docs/GO-FEASIBILITY.md) | Rust→Go 逐项语言特性映射、语义差异、风险与缓解、可行性结论 |
 | [`docs/GO-DESIGN.md`](docs/GO-DESIGN.md) | Go 侧设计：包布局、API 约定、并发模型、生命周期实现、已知简化与路线图 |
 | [`docs/analysis/`](docs/analysis/) | 5 份上游源码深度分析笔记（带 `file:line` 引用） |
-| [`docs/CORDIS-COMPARISON.md`](docs/CORDIS-COMPARISON.md) | 与官方 TypeScript Cordis 4.1.0 的特性级对照、「通用内核」目标评估与 Go 侧分层路线（loader/adapter/隔离） |
+| [`docs/CORDIS-COMPARISON.md`](docs/CORDIS-COMPARISON.md) | 与官方 TypeScript Cordis 4.1.0 的特性级对照、「通用内核」目标评估与 Go 侧分层路线 |
+| [`docs/COMPILE-TIME-REGISTRY.md`](docs/COMPILE-TIME-REGISTRY.md) | 编译期模块注册表的设计审查（核心风险/12 个设计点）与 `module` 包原型验证记录 |
 
 核心判断（摘要）：
 
@@ -138,6 +139,7 @@ go run ./examples/async_plugin
 | 内部 hook | `ctx.OnInternal{Plugin,Status,Service,Config,Update,Get,Set,Listener,Dispatch}`、`ctx.OnLifecycle` |
 | 日志 / 配置 / 时钟 | `ctx.Logger()`、`ctx.LogExporter()`、`cordis.NewJsonConfigSchema()`、`ctx.ResolveConfig`、`ctx.Accessor`、`ctx.SetClock` |
 | 监督（L2） | `cordis.FiberQuota`、`registry.SetQuota`、`fiber.Heartbeat/IdleFor`、`registry.StalledFibers`、`cordis.DetectIsolationCapabilities` |
+| 编译期模块注册表（可选宿主层） | `module.NewRegistry()`、`registry.Register(module.Define(...))`、`module.Load(root, registry, entries)`、`Loader.{Instances,Instance,Locate,Reload,Close,MissingServices,Warnings}` |
 
 typed 服务读写是 **Go 1.27 泛型方法**，类型参数从 `ServiceKey[T]` 自动推断，写法与 Rust 参考的
 `ctx.get(KEY)` 一致（包级泛型函数保留为便捷包装）：
@@ -170,6 +172,32 @@ Go 仍有的语言约束是：**接口方法不能声明类型参数**（Go 1.27
 
 ---
 
+## 编译期模块注册表（可选宿主层，`module/`）
+
+内核本身不是模块系统。若目标是「多个 Go 产品共享同一内核、按配置把模块拼成完整系统」，
+推荐使用 `module` 包（可选层，不改变内核语义；详见
+[`docs/COMPILE-TIME-REGISTRY.md`](docs/COMPILE-TIME-REGISTRY.md)）：
+
+```go
+registry := module.NewRegistry()
+_ = registry.Register(
+	module.Define("app/db", func(ctx cordis.Context, cfg DBConfig) error {
+		_, err := ctx.Provide(DBKey, openDB(cfg))
+		return err
+	}).AddProvides(module.Provides(DBKey)).AddRequires(module.Requires(cordis.LoggerKey)))
+
+loader, err := module.Load(root, registry, []module.Entry{
+	{ID: "database", Module: "app/db", Config: map[string]cordis.Value{"dsn": "mem://"}},
+	{ID: "app", Module: "app/core", Children: []module.Entry{{ID: "http", Module: "app/http"}}},
+})
+defer loader.Close()
+```
+
+`Load` 做三件事：**预检**（缺 provider / 重复 provider / 类型不匹配 / required 环 / 坏配置，
+创建 fiber 前一次性报全）→ **provider-first 调度创建**（parent/child 树 + typed config）→
+**静默校验**（required 失败整体回滚，optional 失败保留并 warning）。entry ID 跨 reload 稳定。
+这是 **link-time composition**：模块随宿主编译，运行期只做实例/配置/树组合，不做代码热加载。
+
 ## 内核 / 宿主边界
 
 **内核负责**：context/作用域、服务注入、fiber 生命周期、effect 所有权与回滚、事件、配置 schema、日志、静态插件注册表。
@@ -193,7 +221,8 @@ make ci      # check + build + test
 当前基线（本地实测）：
 
 - `go test ./...`：内核根包（56 个 smoke/edge/API 测试）+ `conformance/lifecycle`（67）、
-  `conformance/services`（36）、`conformance/runtime`（51）+ `internal/archtest`（2）全部通过
+  `conformance/services`（36）、`conformance/runtime`（51）+ `module`（18 个装配测试）+
+  `internal/archtest`（2）全部通过
 - `go test -race ./...`：通过；并发/异步/生命周期用例 `-count=5..20` 稳定
 - 合并覆盖率 **约 80%**（`go test -coverpkg=github.com/zeokeel/cordis-go -coverprofile ... . ./conformance/...`）
 - `go vet ./...`、`gofmt -l` 干净；`scripts/ci.sh`（gofmt/vet/build/test/race）全绿
@@ -219,6 +248,7 @@ make ci      # check + build + test
 │   ├── lifecycle/            #   CORE-001/007…012/026…030/035…039/043…051
 │   ├── services/             #   CORE-002…006/010/013…016/022/025/032/033/040/041/042/048
 │   └── runtime/              #   CORE-017…021/023/024/031/049
+├── module/                   # 可选宿主层：编译期模块注册表 + 配置驱动装配（预检/调度/失败策略）
 ├── examples/                 # 可运行示例（hello/services/events/async_plugin）
 ├── internal/archtest/        # 内核边界架构测试（go/parser）
 ├── docs/                     # 架构分析 / 可行性 / Go 设计 / 上游分析笔记
