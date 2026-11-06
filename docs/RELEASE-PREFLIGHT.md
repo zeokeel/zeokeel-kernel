@@ -68,8 +68,6 @@
 2. **无 CHANGELOG**：发布说明由 release workflow 自动生成（`--generate-notes`）；如需人工
    changelog 可后续补充。
 3. **默认批准数 0**：仅适用于单人维护；增加维护者后应把 `MIN_APPROVALS` 调到 ≥1 并重新应用脚本。
-4. **Rust 参考源码**：上游 `zeokeel/zeokeel-cordis` 不再以 vendored 目录形式放进本仓库；
-   文档中的 `file:line` 引用均相对上游 v0.6.0 仓库根目录。
 
 ## 6. 发布检查清单（v0.1.0 已全部完成）
 
