@@ -87,8 +87,12 @@ func resetStateful() {
 	}{}
 }
 
-func statefulModule() *module.Descriptor[counterConfig] {
-	return module.Define("test/stateful", func(ctx cordis.Context, cfg counterConfig) error {
+func statefulModule() *module.Descriptor[counterConfig] { return statefulModuleWith(true) }
+
+// statefulModuleWith builds the same stateful module with or without the
+// in-place Update hook, so tests can exercise the fallback reload path.
+func statefulModuleWith(withUpdate bool) *module.Descriptor[counterConfig] {
+	descriptor := module.Define("test/stateful", func(ctx cordis.Context, cfg counterConfig) error {
 		stateful.activates++
 		service := &counter{step: cfg.Step}
 		stateful.current = service
@@ -99,13 +103,6 @@ func statefulModule() *module.Descriptor[counterConfig] {
 			if cfg.Step <= 0 {
 				return fmt.Errorf("step must be positive")
 			}
-			return nil
-		}).
-		WithUpdate(func(_ cordis.Context, _ counterConfig, next counterConfig) error {
-			stateful.updates++
-			// In-place update mutates behind the stable service handle: dependents
-			// keep the same *counter and are not re-activated.
-			stateful.current.step = next.Step
 			return nil
 		}).
 		WithSnapshot(func(cordis.Context) (any, error) {
@@ -124,6 +121,16 @@ func statefulModule() *module.Descriptor[counterConfig] {
 			stateful.current.value = value
 			return nil
 		})
+	if withUpdate {
+		descriptor = descriptor.WithUpdate(func(_ cordis.Context, _ counterConfig, next counterConfig) error {
+			stateful.updates++
+			// In-place update mutates behind the stable service handle: dependents
+			// keep the same *counter and are not re-activated.
+			stateful.current.step = next.Step
+			return nil
+		})
+	}
+	return descriptor
 }
 
 func statefulDependentModule() *module.Descriptor[struct{}] {

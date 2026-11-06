@@ -451,6 +451,10 @@ func (l *Loader) Update(entryID string, config cordis.Value) error {
 	if l.closed {
 		return fmt.Errorf("module: loader is closed")
 	}
+	return l.updateLocked(entryID, config)
+}
+
+func (l *Loader) updateLocked(entryID string, config cordis.Value) error {
 	instance, ok := l.instances[entryID]
 	if !ok {
 		return fmt.Errorf("module: no instance %q", entryID)
@@ -508,6 +512,10 @@ func (l *Loader) Reload(entryID string) (*Instance, error) {
 	if l.closed {
 		return nil, fmt.Errorf("module: loader is closed")
 	}
+	return l.reloadLocked(entryID)
+}
+
+func (l *Loader) reloadLocked(entryID string) (*Instance, error) {
 	closure := l.plan.reloadClosure(entryID)
 	if len(closure) == 0 {
 		return nil, fmt.Errorf("module: no plan entry %q", entryID)
@@ -625,6 +633,10 @@ func (l *Loader) Recreate(entryID string) (*Instance, error) {
 	if l.closed {
 		return nil, fmt.Errorf("module: loader is closed")
 	}
+	return l.recreateLocked(entryID)
+}
+
+func (l *Loader) recreateLocked(entryID string) (*Instance, error) {
 	instance, ok := l.instances[entryID]
 	if !ok {
 		return nil, fmt.Errorf("module: no instance %q", entryID)

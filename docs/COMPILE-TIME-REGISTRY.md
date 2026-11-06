@@ -253,6 +253,15 @@ loader.MissingServices("http")              // Pending 原因
 loader.Update("database", newConfig)        // 原地更新配置：不重启 fiber、不触发依赖重算
 newInst, _ := loader.Reload("database")     // 状态保持的受控重建（Snapshot/Restore + 依赖闭包）
 loader.Recreate("database")                 // 显式接受状态丢失的重建（可选路径）
+
+// 文件驱动：
+loader, _ = module.LoadFile(root, registry, "assembly.json") // 读文件→解析→预检→Load
+report, _ := loader.ApplyFile("assembly.json")               // 配置变更→diff→应用
+watcher, _ := loader.WatchFile("assembly.json", module.WatchOptions{
+    Interval: 200 * time.Millisecond,
+    OnChange: func(report *module.ReloadReport, err error) { /* ... */ },
+})
+defer watcher.Stop()
 ```
 
 关键语义：
@@ -306,7 +315,67 @@ decode+Validate(candidate) → module.Update(ctx, oldCfg, newCfg) → 更新 ent
 - 服务句柄稳定性是 Update 正确性的前提：推荐模块只 `Provide` 一次 long-lived 对象，
   配置变更后 mutate 其内部字段，而不是重新 provide 新对象。
 
-### 4.3 测试覆盖（`go test -race ./module/`，连续多轮通过）
+### 4.3 配置文件与热重载（配置如何传给模块、变更如何送达）
+
+**先澄清层级**：内核根包（`cordis`）本身没有「内核配置文件」——内核只有 context/fiber/service/event;
+logger 之类的内核服务配置通过 `ctx.Intercept("logger", ...)` / 根模块提供。**装配配置文件属于
+可选的 `module` 宿主层**：它描述「加载哪些模块实例、各自的配置、树形结构」，并且可以把每个
+entry 的 `config` 以 **typed config** 交给对应模块。`module` 包作为宿主层允许使用标准库
+`os`/`encoding/json`（内核根包仍保持无 IO、可被任何宿主复用）。
+
+**文件格式（严格 JSON，unknown field 报错；也接受裸数组）**
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {"id": "database", "module": "app/db", "config": {"dsn": "postgres://..."}},
+    {"id": "app", "module": "app/core", "children": [
+      {"id": "http", "module": "app/http", "config": {"addr": ":8080"}}
+    ]}
+  ]
+}
+```
+
+- `ParseConfig([]byte)` / `LoadConfigFile(path)` / `LoadFile(ctx, registry, path)`；
+- 配置在**预检阶段**解码为模块的 `T`（`Descriptor[T]` + `decode/Validate`），启动后模块拿到的
+  是类型化配置；配置错误在创建 fiber 之前报错；
+- 配置变更时 `Loader.Update(id, raw)`/文件热重载会把 **old/new 两个 typed config** 交给模块的
+  `Update(ctx, old, new)`；`Reload` 重建时 Factory 收到新 typed config，`Snapshot/Restore` 负责状态迁移；
+- YAML/TOML 等格式：`module` 包不引入第三方解析器；宿主自己解析后构造 `[]module.Entry` 调用
+  `Load/ApplyEntries` 即可（或后续加可插拔 `Parser` hook）。
+
+**热重载（`ApplyFile` / `WatchFile`）**
+
+`WatchFile` 用标准库轮询（默认 500ms，可配），内容变化 → `ParseConfig` → `ApplyEntries` →
+`OnChange(report, err)`；宿主若有 fsnotify 等事件源，可直接调用 `ApplyFile`，不必用轮询。
+
+`ApplyEntries` 的 diff 语义：
+
+| 变更 | 行为 |
+| --- | --- |
+| 配置变化 + 模块有 `Update` | **原地更新**：fiber 不变、依赖方不重算、状态保持（默认路径） |
+| 配置变化 + 模块无 `Update` | 默认 **拒绝**（`ApplyError`，不静默重启）；可用 `WithUpdateFallback(FallbackReload/FallbackRecreate)` 显式选择状态保持重建或状态丢失重建 |
+| 新增 entry | provider-first 调度创建；无历史状态 |
+| 删除 entry | 停止并释放（状态随删除消失，这是删除语义） |
+| disabled 翻转 | 等价于删除/新增 |
+| 仅 `optional` 等元数据变化 | 只更新元数据，不重建 |
+| entry ID 改 module / 改 parent | **拒绝**（entry ID 不可变；用删除+新 ID 新增，避免状态语义歧义） |
+| 配置解析/预检/策略错误 | **不修改运行中的树**（先全量预检+策略检查，再动手） |
+| 运行时失败（重建/启动/校验） | 返回 `ApplyError`，报告已完成的部分变更；文档标注此路径可能部分应用 |
+
+`ReloadReport.Changes` 用 `ChangeUpdated/ChangeReloaded/ChangeRecreated/ChangeAdded/ChangeRemoved/
+ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志/审计/告警。
+
+**边界**：
+
+- 热重载的是**配置与实例结构**，不是代码；编译期模块集的代码级热更新仍不可能；
+- 热重载后的 fiber/uid 会变化（entry ID 稳定）；宿主以 entry ID 为键，不缓存 `*Instance` 语义；
+- 对正在执行 `Update/Reload` 的条目，`ApplyEntries` 用 Loader 的 RWMutex 串行化，不会并发撕裂；
+- 轮询 watcher 有间隔延迟（默认 500ms），对毫秒级配置一致性有要求的宿主用事件源主动调用；
+- 若配置文件被外部破坏（非法 JSON/未知模块），Watcher 只回调错误并保留运行中的树，不会把系统打挂。
+
+### 4.4 测试覆盖（`go test -race ./module/`，连续多轮通过）
 
 | 场景 | 结果 |
 | --- | --- |
@@ -327,12 +396,19 @@ decode+Validate(candidate) → module.Update(ctx, oldCfg, newCfg) → 更新 ent
 | Reload 自动包含依赖闭包，provider+dependent 状态经 Snapshot/Restore 保持 | ✅ |
 | 依赖方缺 Snapshot/Restore → `ErrReloadNotStateful` 且旧树不变 | ✅ |
 | Snapshot 失败 → 中止且旧树不变 | ✅ |
+| 配置文件解析（对象/裸数组/严格字段/版本）→ LoadFile 把 typed config 交给模块 | ✅ |
+| ApplyFile 配置变更：有 Update → 原地更新（fiber/服务/状态不变） | ✅ |
+| 无 Update + 默认策略 → ApplyError 且旧树不变 | ✅ |
+| FallbackRecreate/FallbackReload：显式重建 / 状态保持重建 | ✅ |
+| 配置增删 entry（disabled 翻转同）→ 报告 added/removed，运行树同步 | ✅ |
+| 非法配置/预检失败 → 运行树不变 | ✅ |
+| WatchFile 轮询检测文件变更并触发 Update | ✅ |
 | 注册表重复注册/非法描述符 → error | ✅ |
 
 > 原型刻意**不改内核**：所有模块系统语义都在 `module` 包完成。这验证了内核对上层扩展的
 > 友好度，也把「内核该不该变大」的决策留到后面。
 
-### 4.4 与官方 loader 的对应关系
+### 4.5 与官方 loader 的对应关系
 
 | 官方 `cordis-plugin-loader` | 本原型 |
 | --- | --- |
@@ -373,14 +449,17 @@ decode+Validate(candidate) → module.Update(ctx, oldCfg, newCfg) → 更新 ent
    loader 只能做到“不支持的模块直接报错，绝不静默丢失”。需要在模块模板/评审清单中强制。
 5. **演化风险**：模块配置/服务契约随版本演进；没有 contract 包/版本规则 + 配置迁移，
    跨版本组合会失控。编译期类型检查只能覆盖代码内契约，覆盖不了持久化配置。
-6. **工程复杂度风险**：每个外部插件系统仍要写 Go adapter（即使纯编译期，也要适配其
+6. **配置热重载的运行时风险（新增）**：文件监听延迟/半写文件/外部编辑冲突、运行时失败导致的部分应用、
+   watcher 与宿主其它事件源的并发——`ApplyEntries` 已做预检原子性与锁串行化，但"文件内容"本身是
+   不可信输入，宿主应对 `ApplyError` 做告警/回滚策略；配置审计与版本化建议由宿主保存。
+7. **工程复杂度风险**：每个外部插件系统仍要写 Go adapter（即使纯编译期，也要适配其
    API/生命周期/错误模型，包括 Update/Snapshot 契约）；这不是内核能消除的成本。
 
 ### 5.3 建议的下一步（在这个路线内）
 
 | 优先级 | 事项 | 说明 |
 | --- | --- | --- |
-| P0 | 把 `module` 包从原型硬化 | 已实现 Update/Reload/Recreate 与状态保持；下一步：错误类型/API 稳定、文档、示例、CI，optional 失败策略选项、entry 级 isolate/intercept、配置持久化/热更触发 |
+| P0 | 把 `module` 包从原型硬化 | 已实现 Update/Reload/Recreate、状态保持、JSON 配置文件、ApplyFile diff 热重载、WatchFile 轮询；下一步：错误类型/API 稳定、文档、示例、CI，YAML 可插拔解析、entry 级 isolate/intercept、配置持久化/审计钩子 |
 | P0 | **ExtensionPoint[T]/Contribution[T] 工具** | 让模块贡献命令/工具/路由等集合项，统一所有权/顺序/冲突 |
 | P0 | 产品装配测试模板 | 每个产品的 entry 配置在 CI 里跑 `Validate`；防止漏配/环/未知模块 |
 | P1 | build tags / 多产品 assembly 模板 | 按产品拆 main + 模块集，控制二进制体积与攻击面 |

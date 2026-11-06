@@ -200,8 +200,21 @@ defer loader.Close()
 配置与状态语义：`loader.Update(id, cfg)` 原地更新（不重建 fiber、不触发依赖重算，模块实现
 `WithUpdate` 且对外服务句柄稳定）；`loader.Reload(id)` 状态保持重建（`Snapshot/Restore` +
 自动依赖闭包，不满足条件时在动树之前报错）；`loader.Recreate(id)` 才是显式状态丢失。也就是
-**默认路径不丢状态，丢状态必须显式选择**。这是 **link-time composition**：模块随宿主编译，
-运行期只做实例/配置/树组合，不做代码热加载。
+**默认路径不丢状态，丢状态必须显式选择**。配置可直接来自 JSON 装配文件并热重载：
+
+```go
+loader, err := module.LoadFile(root, registry, "assembly.json") // 解析→预检→加载
+report, err := loader.ApplyFile("assembly.json")                // 文件变更→diff→应用（Update 原地）
+watcher, err := loader.WatchFile("assembly.json", module.WatchOptions{Interval: 200 * time.Millisecond})
+defer watcher.Stop()
+```
+
+`assembly.json` 的每个 entry 的 `config` 在预检阶段解码为模块的 typed config 再交给模块；
+`ApplyEntries/ApplyFile` 做 diff：配置变化优先原地 Update（状态保持），无 Update 的模块默认报错、
+可显式选择状态保持 Reload 或状态丢失 Recreate；新增/删除模块、disabled 翻转会报告 `ChangeAdded/
+ChangeRemoved`；非法配置/预检失败不触碰运行中的树。内核根包本身没有全局配置文件（内核不做 IO），
+装配文件属于 `module` 宿主层。这是 **link-time composition**：模块随宿主编译，运行期只做
+实例/配置/树组合与配置热重载，不做代码热加载。
 
 ## 内核 / 宿主边界
 
@@ -226,7 +239,7 @@ make ci      # check + build + test
 当前基线（本地实测）：
 
 - `go test ./...`：内核根包（56 个 smoke/edge/API 测试）+ `conformance/lifecycle`（67）、
-  `conformance/services`（36）、`conformance/runtime`（51）+ `module`（23 个装配/状态保持测试）+
+  `conformance/services`（36）、`conformance/runtime`（51）+ `module`（32 个装配/配置热重载测试）+
   `internal/archtest`（2）全部通过
 - `go test -race ./...`：通过；并发/异步/生命周期用例 `-count=5..20` 稳定
 - 合并覆盖率 **约 80%**（`go test -coverpkg=github.com/zeokeel/cordis-go -coverprofile ... . ./conformance/...`）

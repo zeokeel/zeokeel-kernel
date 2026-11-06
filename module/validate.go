@@ -19,20 +19,20 @@ type Entry struct {
 	// ID is the stable instance identity (required, unique across the tree).
 	// Reload/Locate/Instance use it; kernel fiber IDs are not stable across
 	// restarts and should not be used by the host.
-	ID string
+	ID string `json:"id"`
 	// Module is the registered module ID to instantiate.
-	Module string
+	Module string `json:"module"`
 	// Config is the entry config, decoded into the module's typed config.
-	Config cordis.Value
+	Config cordis.Value `json:"config,omitempty"`
 	// Disabled skips this entry and its whole subtree.
-	Disabled bool
+	Disabled bool `json:"disabled,omitempty"`
 	// Optional tolerates a runtime activation failure or a permanent pending
 	// state: the entry is kept (Failed/Pending) and reported as a warning, and
 	// it does not roll the assembly back. Requirements still have to satisfy
 	// pre-flight validation unless they are declared optional by the module.
-	Optional bool
+	Optional bool `json:"optional,omitempty"`
 	// Children are nested module instances.
-	Children []Entry
+	Children []Entry `json:"children,omitempty"`
 }
 
 // ValidationError aggregates every pre-flight problem found in an entry tree.
