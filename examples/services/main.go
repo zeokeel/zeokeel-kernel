@@ -1,9 +1,9 @@
 // Command services demonstrates typed services, dependency injection and an
 // availability gate.
 //
-// It mirrors upstream examples/services.rs: a plugin declares that it injects a
-// service, so it stays Pending until the service becomes available; when the
-// provider disappears the dependent unloads automatically.
+// It declares that it injects a service, so it stays Pending until the service
+// becomes available; when the provider disappears the dependent unloads
+// automatically.
 package main
 
 import (

@@ -1,10 +1,9 @@
 // Package archtest_test enforces the zeokeel-kernel kernel boundary described in
-// docs/analysis/04-runtime-config-logger.md §10.4.
+// Cordis CORE semantics.
 //
 // The kernel is a standard-library-only library: it must not grow host/IO or
 // business imports, must not import its own example/conformance/reference
 // packages, and must keep a bounded public API surface. These checks mirror
-// the upstream Rust reference's tests/kernel_boundary.rs.
 //
 // Everything here is deliberately test-only: the checks parse source files and
 // never link against the kernel, so they can run even while the rest of the
@@ -31,7 +30,7 @@ import (
 const (
 	// exportedAPICap bounds the number of package-level exported func/type/
 	// const/var identifiers in the kernel root. It is a tripwire matching the
-	// Rust reference's PUBLIC_ITEM_CAP = 420, not a hard architectural limit.
+	// The public API surface is capped at 420 exported items by design.
 	exportedAPICap = 420
 
 	// defaultModulePath is used by the scanner self-tests. The real module
@@ -45,7 +44,7 @@ const (
 )
 
 // forbiddenImports is the exact host/IO/business import blocklist. Entries are
-// the same categories as the Rust kernel boundary: networking, OS/process/
+// the same categories as the Cordis kernel boundary: networking, OS/process/
 // filesystem, database, native escape hatches, serialization/templates, and
 // profiling.
 var forbiddenImports = map[string]struct{}{

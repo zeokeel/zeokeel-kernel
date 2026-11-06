@@ -22,6 +22,6 @@ SOFTWARE.
 
 ---
 
-Upstream attribution: this project is an independent Go reimplementation of
-https://github.com/zeokeel/zeokeel-cordis (MIT). No upstream Rust source is
-redistributed in this repository.
+Cordis is a component-composition paradigm. This project is an independent Go
+implementation of that paradigm; no third-party source code is redistributed
+in this repository.

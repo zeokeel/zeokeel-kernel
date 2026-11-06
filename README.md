@@ -118,7 +118,6 @@ panic 遏制。**刻意不做进程内热配置更新**（配置变更=重启）
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/GO-DESIGN.md`](docs/GO-DESIGN.md) | Go 侧设计：包布局、API 约定、并发模型、生命周期实现、简化与路线图 |
-| [`docs/CORDIS-COMPARISON.md`](docs/CORDIS-COMPARISON.md) | 与官方 TypeScript Cordis 4.1.0 的特性级对照与通用内核评估 |
 | [`docs/COMPILE-TIME-REGISTRY.md`](docs/COMPILE-TIME-REGISTRY.md) | 编译期模块注册表设计审查、热配置更新取舍、崩溃隔离边界 |
 | [`docs/RELEASE-PREFLIGHT.md`](docs/RELEASE-PREFLIGHT.md) | Go module 发布预检报告与发布步骤 |
 | [`docs/REPOSITORY-SETUP.md`](docs/REPOSITORY-SETUP.md) | 仓库配置：分支保护、必需 CI 检查、合并策略、发布流程 |
@@ -191,8 +190,8 @@ GitHub Release（发布步骤见 [`docs/RELEASE-PREFLIGHT.md`](docs/RELEASE-PREF
   fatal/OOM/死循环只能靠进程 supervisor（L1 隔离按需再加，见 COMPILE-TIME-REGISTRY §6）；
 - **无进程内热配置更新**：配置变更=重启进程（编译期路线的有意简化）；
 - **模块加载器是最小子集**：启动装配 + 预检 + 定位；无动态 ESM/HMR、无 include/group 完整语义；
-- **部分官方 4.1 特性未移植**：Proxy 服务属性、callable services、`ctx.mixin`、装饰器、
-  volatile config、`internal/commit`、loader 生态等（见 CORDIS-COMPARISON）。
+- **部分官方 4.1 特性未实现**：Proxy 服务属性、callable services、`ctx.mixin`、装饰器、
+  volatile config、`internal/commit`、loader 生态等（后续可补）。
 
 ## License
 

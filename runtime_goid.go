@@ -16,7 +16,7 @@ func runtimeGosched() { runtime.Gosched() }
 // reentrancy contract: a lifecycle operation may call back into its own fiber
 // (a cleanup disposing its own fiber, an update hook restarting it), while a
 // concurrent call from another goroutine must return LifecycleBusy instead of
-// deadlocking. The Rust reference tracks this with an operation token plus a
+// deadlocking. Cordis tracks this with an operation token plus a
 // thread/task-local frame; Go's goroutines are the equivalent execution unit,
 // so the token registry is keyed by goroutine id.
 //

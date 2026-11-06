@@ -9,9 +9,9 @@ import (
 
 // ServiceValue is the type-erased value stored in the service store.
 //
-// In the Rust reference this is `Arc<dyn Any + Send + Sync>`; in Go the value
-// is stored directly (usually a pointer or an interface value) and recovered
-// with a type assertion. Provide pointer values for shared mutable state.
+// In Go the value is stored directly (usually a pointer or an interface value)
+// and recovered with a type assertion. Provide pointer values for shared mutable
+// state.
 type ServiceValue = any
 
 // ServiceKey is a typed handle to a service name.
@@ -230,7 +230,7 @@ func (a Accessor) read(c Context) (ServiceValue, bool) {
 		if a.Get == nil {
 			return result{}
 		}
-		// Go convention: a nil dynamic value means "property absent" (the Rust
+		// Go convention: a nil dynamic value means "property absent" (the Cordis
 		// port maps accessor panics and Value::Null-like absence the same way).
 		if value := a.Get(c); value != nil {
 			return result{value: value, ok: true}
@@ -298,7 +298,7 @@ func (m *ContextMeta) lookup(key string) (any, bool) {
 // Service is the optional interface for a value registered with ProvideService
 // (Cordis `class X extends Service`).
 //
-// Rust services also expose optional check/schema/resolveConfig hooks; Go
+// Cordis services also expose optional check/schema/resolveConfig hooks; Go
 // exposes them through optional interfaces so a minimal service only needs Name.
 type Service interface {
 	Name() string

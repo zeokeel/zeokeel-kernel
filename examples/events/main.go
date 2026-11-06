@@ -1,7 +1,5 @@
 // Command events demonstrates the event bus: emit/bail/once, waterfall
 // middleware (including veto), and the asynchronous lane.
-//
-// It mirrors upstream examples/events.rs.
 package main
 
 import (

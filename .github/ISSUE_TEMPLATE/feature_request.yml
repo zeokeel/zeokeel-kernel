@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a kernel/module-layer capability or an upstream-parity feature.
+description: Propose a kernel/module-layer capability or a Cordis-parity feature.
 title: "feat: "
 labels: ["enhancement"]
 body:
@@ -7,7 +7,7 @@ body:
     id: problem
     attributes:
       label: Problem / use case
-      description: What host/embedder problem does this solve? Link upstream Cordis/Rust semantics if relevant.
+      description: What host/embedder problem does this solve? Link Cordis semantics if relevant.
     validations:
       required: true
   - type: textarea

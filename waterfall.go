@@ -143,7 +143,7 @@ func callValueContained(fn func() Value) (value Value, panicValue any) {
 	return fn(), nil
 }
 
-// waterfall helpers mirroring the Rust constructors.
+// waterfall helpers mirroring the Cordis constructors.
 
 // WaterfallListener wraps fn as a WaterfallListenerFunc.
 func WaterfallListener(fn WaterfallListenerFunc) WaterfallListenerFunc { return fn }

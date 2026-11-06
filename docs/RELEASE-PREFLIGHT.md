@@ -1,7 +1,10 @@
 # 发布预检与发布状态（Go module）
 
-> 模块：`github.com/zeokeel/zeokeel-kernel` ｜ 状态：**已发布 `v0.1.0`**
-> （https://github.com/zeokeel/zeokeel-kernel/releases/tag/v0.1.0）
+> 模块：`github.com/zeokeel/zeokeel-kernel` ｜ 状态：**已发布 `v0.1.1`**
+> （https://github.com/zeokeel/zeokeel-kernel/releases/tag/v0.1.1）
+>
+> `v0.1.1` 为文档/仓库清理版本：项目描述统一为 Cordis 内核实现；内部参考分析文档已移除；
+> 无 API 或运行时行为变更。
 > 预检脚本：[`scripts/release-preflight.sh`](../scripts/release-preflight.sh)（也可 `make preflight`）。
 
 ## 1. 模块信息
@@ -14,7 +17,7 @@
 | 发布包 | `github.com/zeokeel/zeokeel-kernel`、`github.com/zeokeel/zeokeel-kernel/module` |
 | 测试 | 233 个（root 56、conformance 154、module 21、archtest 2） |
 | 覆盖率（`-coverpkg=...kernel,.../module`） | 79.9% |
-| 已验证的消费方式 | 干净临时模块 `go get github.com/zeokeel/zeokeel-kernel@v0.1.0` 成功 |
+| 已验证的消费方式 | 干净临时模块 `go get github.com/zeokeel/zeokeel-kernel@v0.1.1` 成功 |
 
 ## 2. 本地门禁结果（clean worktree）
 
@@ -34,7 +37,7 @@
 | 导出 API doc comment（`scripts/doccheck.go`） | ✅ 485/485 |
 | README / LICENSE / go.mod / CI workflow / docs | ✅ |
 | git remote 与 module path 匹配且可达 | ✅ |
-| 版本 tag | ✅ `v0.1.0` |
+| 版本 tag | ✅ `v0.1.1` |
 
 最终预检：**passed=29 / warnings=0 / failed=0 → READY**。
 
@@ -48,7 +51,7 @@
 | 分支保护 | PR-only；`enforce_admins: true`；禁止 force push / 删除；strict required checks；对话必须 resolved |
 | 必需检查 | `lint`、`test`、`race`、`coverage`、`cross`、`govulncheck`（全部在 GitHub Actions 上通过） |
 | 批准数 | 0（单人维护；增加第二名维护者后 `MIN_APPROVALS=1 ./scripts/setup-github.sh`） |
-| 发布 tag | `v0.1.0`（annotated），release workflow 已创建 GitHub Release |
+| 发布 tag | `v0.1.1`（annotated），release workflow 已创建 GitHub Release |
 | 发布自动化 | `.github/workflows/release.yml`：tag 触发 → `scripts/ci.sh` → `gh release create --generate-notes` |
 
 分支保护/合并策略配置脚本：[`scripts/setup-github.sh`](../scripts/setup-github.sh)；说明见
@@ -69,12 +72,12 @@
    changelog 可后续补充。
 3. **默认批准数 0**：仅适用于单人维护；增加维护者后应把 `MIN_APPROVALS` 调到 ≥1 并重新应用脚本。
 
-## 6. 发布检查清单（v0.1.0 已全部完成）
+## 6. 发布检查清单（v0.1.1）
 
 - [x] `main` clean，`make ci` + `make preflight` 通过
 - [x] module path / go directive / LICENSE / README 与发布仓库一致
 - [x] 远端仓库创建并推送，GitHub Actions 严格 CI 全绿
 - [x] `main` 分支保护 + 必需检查 + squash-only 生效
-- [x] annotated tag `v0.1.0` 已推送
+- [x] annotated tag `v0.1.1` 已推送
 - [x] release workflow 创建 GitHub Release
-- [x] 干净环境 `go get ...@v0.1.0` 成功
+- [x] 干净环境 `go get ...@v0.1.1` 成功

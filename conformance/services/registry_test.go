@@ -183,7 +183,7 @@ func TestCore022_MapAPI(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-022 (delete): deleting a runtime disposes all of its fibers and returns
-// the runtime. The Go port currently rejects deletes of non-empty runtimes, so
+// the runtime. The Go implementation currently rejects deletes of non-empty runtimes, so
 // this test detects the divergence and reports it as a kernel gap (it turns into
 // a hard assertion once Delete implements the documented contract).
 // ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ func TestCore022_DeleteDisposesRuntimeFibers(t *testing.T) {
 	registry := root.Registry()
 	removed := registry.Delete(cordis.NamedPluginKey("delete-alpha"))
 	if removed == nil {
-		t.Skip("KERNEL-GAP CORE-022: Registry.Delete must dispose the runtime's fibers and return the removed runtime (Rust registry.rs:1076-1086); Go Registry.Delete rejects non-empty runtimes and returns nil (registry.go:450-464)")
+		t.Skip("KERNEL-GAP CORE-022: Registry.Delete must dispose the runtime's fibers and return the removed runtime (Cordis semantics); Go Registry.Delete rejects non-empty runtimes and returns nil (registry.go:450-464)")
 	}
 	if removed.Name() != "delete-alpha" {
 		t.Fatalf("removed runtime name = %q, want %q", removed.Name(), "delete-alpha")

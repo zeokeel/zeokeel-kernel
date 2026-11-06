@@ -2,9 +2,7 @@
 // events/waterfall/internal hooks (CORE-017..021, 031), logger/config/clock
 // (CORE-023, 024) and quiescence (CORE-049).
 //
-// These tests are derived from the Rust reference test suite; see
-// docs/analysis/05-core-cases.md (CORE main table), 03-registry-events.md
-// (events/waterfall) and 04-runtime-config-logger.md (config/logger/clock).
+// These tests are derived from the Cordis CORE test suite (CORE-001…051).
 //
 // Every test builds its own Root and registers a cleanup that disposes the
 // whole tree with recover protection, so a failing assertion elsewhere cannot

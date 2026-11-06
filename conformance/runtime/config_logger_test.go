@@ -108,7 +108,6 @@ func assertIncreasingSeqs(t *testing.T, records []cordis.LogRecord) {
 // ---------------------------------------------------------------------------
 // CORE-023: logger — threshold, exporter, ring buffer/seq, intercept,
 // clock injection, numeric level clamping.
-// Rust: logger.rs:62..251, api_surface.rs:236/250/600/631/659/704
 // ---------------------------------------------------------------------------
 
 func TestCore023_LoggerThresholdExporterAndBuffer(t *testing.T) {
@@ -194,8 +193,7 @@ func TestCore023_RingBufferBoundedSeqAndClear(t *testing.T) {
 	}
 
 	// ClearBuffer only drops the buffer: the exporter keeps receiving and the
-	// exporter disposer is idempotent. Rust:
-	// api_surface.rs:250::api_logger_exporter_count_and_clear_buffer.
+	// exporter disposer is idempotent.
 	clearService := cordis.NewLoggerServiceWithBuffer(cordis.LogInfo, 1)
 	clearExporter := &countingExporter{}
 	clearDisposer := clearService.Exporter(clearExporter)
@@ -594,8 +592,7 @@ func TestCore023_SlogExporterBridge(t *testing.T) {
 	if !strings.Contains(out, "k=v") {
 		t.Fatalf("slog output %q does not contain the structured field", out)
 	}
-	// The Go counterpart of the TracingExporter forwards LogRecord.Name as the
-	// `name` field (Rust: tracing target/field `name`).
+	// The exporter forwards LogRecord.Name as the `name` field.
 	if !strings.Contains(out, "demo") {
 		t.Fatalf("slog output %q does not contain the logger name (name field)", out)
 	}
@@ -605,7 +602,6 @@ func TestCore023_SlogExporterBridge(t *testing.T) {
 // CORE-024: config schemas — validate/merge/deny_unknown/typed-null optional
 // fields, resolved-vs-raw separation, update validation and intercept
 // resolve_config ordering.
-// Rust: config.rs:56..173, service.rs:190
 // ---------------------------------------------------------------------------
 
 func validationIssues(t *testing.T, err error) []string {

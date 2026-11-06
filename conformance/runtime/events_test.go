@@ -14,8 +14,6 @@ import (
 // ---------------------------------------------------------------------------
 // CORE-017: listeners are owned by the registering fiber and are recycled on
 // unload, on both the sync and the async lane.
-// Rust: lifecycle.rs:137::event_bail_and_owner_disposal,
-//       async_conformance.rs:565::async_listeners_unload_with_their_fiber
 // ---------------------------------------------------------------------------
 
 func TestCore017_SyncListenerRecycledWithOwner(t *testing.T) {
@@ -88,7 +86,7 @@ func TestCore017_AsyncListenerRecycledWithOwner(t *testing.T) {
 
 // TestCore017_ListenerRemovedOnActivationRollback covers the second owner
 // recovery path: a failed activation rolls back the listeners it registered
-// (Rust: fail_fiber_* / discard_activation_effects remove_owner).
+// (activation rollback removes the listener).
 func TestCore017_ListenerRemovedOnActivationRollback(t *testing.T) {
 	root := newRoot(t)
 	var hits atomic.Int64
@@ -118,9 +116,6 @@ func TestCore017_ListenerRemovedOnActivationRollback(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-018: prepend/global/once options and Bail value semantics.
-// Rust: events.rs:42::event_options_prepend_and_global,
-//       events.rs:23::event_once_fires_exactly_once,
-//       events.rs:156::bail_ignores_null_and_false_values
 // ---------------------------------------------------------------------------
 
 func TestCore018_PrependAndGlobalOptions(t *testing.T) {
@@ -274,8 +269,6 @@ func TestCore018_BailIgnoresNullAndFalse(t *testing.T) {
 // CORE-019: event dispatch scope filter — dispatch scope must equal the
 // listener registration scope, except for global listeners. Events never
 // propagate to ancestors.
-// Rust: events.rs:80::event_context_filter_matches_scopes,
-//       events.rs:119::event_waterfall_respects_context_filter
 // ---------------------------------------------------------------------------
 
 func TestCore019_EventScopeFilter(t *testing.T) {
@@ -342,7 +335,6 @@ func TestCore019_WaterfallScopeFilter(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-020: waterfall middlewares — explicit Next chain, onion order, veto,
 // repeatable Next, terminal shortcut, fiber ownership, and fail-closed panics.
-// Rust: async_conformance.rs:253..817, events.rs:119, waterfall.rs
 // ---------------------------------------------------------------------------
 
 func TestCore020_WaterfallOrderAndRewrite(t *testing.T) {
@@ -610,7 +602,6 @@ func TestCore020_WaterfallPanicIsFailClosed(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-021: the nine typed internal/* hooks — plugin, status, service, config,
 // update, get, set, listener, dispatch — with fixed order and veto/rewrite
-// semantics. Rust: internal.rs:34..307, api_surface.rs:430
 // ---------------------------------------------------------------------------
 
 // recorderPlugin captures the config it was activated with (for config-hook
@@ -1030,7 +1021,6 @@ func TestCore021_RawInternalBusIsNotFiberOwned(t *testing.T) {
 // CORE-031: a panicking sync listener does not abort dispatch; later listeners
 // still run. (Waterfall middleware is the fail-closed exception, see
 // TestCore020_WaterfallPanicIsFailClosed.)
-// Rust: hardening.rs:190::event_listener_panic_does_not_abort_dispatch
 // ---------------------------------------------------------------------------
 
 func TestCore031_ListenerPanicDoesNotAbortDispatch(t *testing.T) {

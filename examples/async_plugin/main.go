@@ -3,9 +3,9 @@
 //
 // Go has no futures: an async plugin is a blocking ActivateAsync that receives a
 // context.Context, and async cleanups are functions that also receive a context.
-// Cancelling that context is the Go analogue of dropping a Rust future; the
+// Cancelling that context is the Go analogue of cancelling an async operation; the
 // kernel completes the teardown and parks the cleanups it could not await for
-// the next dispose (the Rust A-9 contract).
+// the next dispose (the Cordis A-9 contract).
 package main
 
 import (

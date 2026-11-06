@@ -12,8 +12,8 @@ import (
 // has no reactor that a thread-park executor would be unable to drive, so the
 // default behavior is to run the cleanup inline on the calling goroutine. The
 // hook is kept for hosts that want to route blocking disposal through their own
-// runtime (or observe/reject it), mirroring the Rust reference's
-// BlockingExecutor contract (CORE-034).
+// runtime (or observe/reject it), mirroring the Cordis BlockingExecutor
+// contract (CORE-034).
 type BlockingExecutor interface {
 	// BlockOn runs fn to completion on the calling goroutine or dispatches it
 	// to a runtime-managed thread and blocks until it finishes. It must not
@@ -65,7 +65,7 @@ func runBlocking(ctx context.Context, fn func()) {
 	e.BlockOn(ctx, fn)
 }
 
-// YieldNow is the Go analogue of the Rust kernel's yield_now(): it gives other
+// YieldNow is the Go analogue of the Cordis kernel's yield_now(): it gives other
 // goroutines a chance to run. Conformance tests use it to observe whether
 // asynchronous listeners are dispatched concurrently or serially.
 func YieldNow() { runtimeGosched() }

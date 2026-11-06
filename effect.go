@@ -14,7 +14,7 @@ type Cleanup func()
 // callbacks. An empty effect means the registration owns nothing to clean up.
 type Effect []Cleanup
 
-// CleanupOf wraps a closure as a Cleanup (ergonomic helper mirroring the Rust
+// CleanupOf wraps a closure as a Cleanup (ergonomic helper mirroring the Cordis
 // cleanup() function).
 func CleanupOf(fn func()) Cleanup { return fn }
 

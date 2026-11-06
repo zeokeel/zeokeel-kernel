@@ -532,7 +532,7 @@ func TestCore032_InterfaceTypedServiceKey(t *testing.T) {
 // CORE-033: Go analogy of "the root context/fiber graph has no strong cycle" -
 // dropping the root after DisposeAll releases the whole plugin/fiber graph (Go
 // GC collects reference cycles; the observable contract is release, not refcount).
-// See docs/analysis/05-core-cases.md §5.1.
+// See spec/CORDIS-CORE.md §5.1.
 // ---------------------------------------------------------------------------
 
 // core033Plugin is deliberately non-zero-sized: Go does not run finalizers for

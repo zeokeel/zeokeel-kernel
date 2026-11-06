@@ -1,8 +1,7 @@
 // Command hello is the minimal Zeokeel Kernel plugin example.
 //
-// It mirrors upstream examples/hello.rs: a plugin registers one effect whose
-// cleanup runs exactly once, in reverse registration order, when the fiber is
-// disposed.
+// It registers one effect whose cleanup runs exactly once, in reverse
+// registration order, when the fiber is disposed.
 package main
 
 import (
