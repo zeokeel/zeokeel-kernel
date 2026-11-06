@@ -2,9 +2,11 @@ package module
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	cordis "github.com/zeokeel/cordis-go"
 )
@@ -79,7 +81,19 @@ type Loader struct {
 	order     []*Instance
 	warnings  []string
 	closed    bool
+	mu        sync.RWMutex
 }
+
+// ErrUpdateUnsupported is returned by Loader.Update when the module did not
+// declare an in-place update hook. The loader never silently restarts a module
+// (that would lose state); the caller must choose Reload (state-preserving,
+// requires Snapshot/Restore) or Recreate (explicit state loss).
+var ErrUpdateUnsupported = errors.New("module: module does not support in-place config updates (no Descriptor.Update hook)")
+
+// ErrReloadNotStateful is returned by Loader.Reload when some entry in the
+// reload closure cannot preserve its state (missing Snapshot/Restore). Reload is
+// therefore a no-op: the old instances are left untouched.
+var ErrReloadNotStateful = errors.New("module: state-preserving reload requires Snapshot and Restore on every entry in the reload closure")
 
 // Load validates the entry tree, instantiates every module as a fiber (parents
 // before children), waits until the tree is quiescent, and verifies the startup
@@ -363,18 +377,24 @@ func (l *Loader) verifyProvides(instance *Instance) string {
 
 // Instance returns one loaded instance by stable entry ID.
 func (l *Loader) Instance(entryID string) (*Instance, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	instance, ok := l.instances[entryID]
 	return instance, ok
 }
 
 // Instances returns a snapshot of the loaded instances in creation order.
 func (l *Loader) Instances() []*Instance {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	return append([]*Instance(nil), l.order...)
 }
 
 // Locate returns the instance that owns a fiber (useful for diagnostics that
 // receive a fiber handle from the kernel).
 func (l *Loader) Locate(fiber *cordis.Fiber) (*Instance, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	if fiber == nil {
 		return nil, false
 	}
@@ -387,14 +407,24 @@ func (l *Loader) Locate(fiber *cordis.Fiber) (*Instance, bool) {
 }
 
 // Warnings returns optional-module findings from validation and startup.
-func (l *Loader) Warnings() []string { return append([]string{}, l.warnings...) }
+func (l *Loader) Warnings() []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return append([]string{}, l.warnings...)
+}
 
 // Closed reports whether the loader was closed.
-func (l *Loader) Closed() bool { return l.closed }
+func (l *Loader) Closed() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.closed
+}
 
 // Close disposes every loaded fiber (children are cascaded by the kernel) and
 // releases the instances. It is idempotent.
 func (l *Loader) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.closed {
 		return nil
 	}
@@ -403,11 +433,195 @@ func (l *Loader) Close() error {
 	return nil
 }
 
-// Reload disposes one instance subtree and recreates it from the same entry
-// configuration under the same parent context. The instance ID is preserved; the
-// kernel fiber (and its uid) is new. On failure the new subtree is torn down and
-// the error is returned; the old instance is already gone.
+// Update applies a new config to a running module instance in place.
+//
+// It validates the candidate with the module's typed decode/Validate hooks and
+// then calls the module's Descriptor.Update hook. The fiber, its services,
+// listeners, effects and internal module state stay alive; dependents are not
+// re-activated because the kernel service version does not change. This is the
+// preferred config-change path, and it never loses module state.
+//
+// Modules that do not declare Update return ErrUpdateUnsupported: the loader
+// refuses to silently restart (which would lose state). Use Reload for a
+// state-preserving recreate (Snapshot/Restore) or Recreate to explicitly accept
+// state loss.
+func (l *Loader) Update(entryID string, config cordis.Value) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return fmt.Errorf("module: loader is closed")
+	}
+	instance, ok := l.instances[entryID]
+	if !ok {
+		return fmt.Errorf("module: no instance %q", entryID)
+	}
+	resolved, ok := l.plan.byID[entryID]
+	if !ok {
+		return fmt.Errorf("module: no plan entry %q", entryID)
+	}
+	if resolved.def.update == nil {
+		return fmt.Errorf("module: update entry %q (%s): %w", entryID, resolved.def.id, ErrUpdateUnsupported)
+	}
+	if state := instance.State(); state != cordis.Active {
+		return fmt.Errorf("module: update entry %q: instance is %s, want Active", entryID, state)
+	}
+	candidate, err := resolved.def.decode(config)
+	if err != nil {
+		return fmt.Errorf("module: update entry %q: invalid config: %w", entryID, err)
+	}
+	if resolved.def.validate != nil {
+		if err := resolved.def.validate(candidate); err != nil {
+			return fmt.Errorf("module: update entry %q: config rejected: %w", entryID, err)
+		}
+	}
+	moduleCtx, ok := instance.fiber.Context()
+	if !ok {
+		return fmt.Errorf("module: update entry %q: no context", entryID)
+	}
+	if err := resolved.def.update(moduleCtx, resolved.decoded, candidate); err != nil {
+		// The module owns the transaction: it should validate before mutating.
+		return fmt.Errorf("module: update entry %q: module rejected config: %w", entryID, err)
+	}
+	resolved.entry.Config = config
+	resolved.decoded = candidate
+	instance.entry.Config = config
+	return nil
+}
+
+// Reload recreates one entry (and its dependency closure) without losing module
+// state.
+//
+// The closure is the entry subtree plus every loader-managed fiber that
+// (transitively) injects a service provided by an entry in it; otherwise the
+// kernel's provider-version change would re-activate those dependents and their
+// state would be lost. Every closure instance must be Active and the module must
+// implement Snapshot/Restore; if that is not the case, Reload returns
+// ErrReloadNotStateful before touching anything.
+//
+// Order: snapshot in parent-first load order (dependencies still alive), dispose
+// the old closure, recreate it, restore in parent-first load order, then verify
+// startup and contracts. Entry IDs stay stable; kernel fiber IDs/UIDs change.
+// Failure after dispose tears down the new instances and returns the error.
 func (l *Loader) Reload(entryID string) (*Instance, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil, fmt.Errorf("module: loader is closed")
+	}
+	closure := l.plan.reloadClosure(entryID)
+	if len(closure) == 0 {
+		return nil, fmt.Errorf("module: no plan entry %q", entryID)
+	}
+	instances := make([]*Instance, 0, len(closure))
+	missingHooks := make([]string, 0)
+	for _, resolved := range closure {
+		instance, ok := l.instances[resolved.entry.ID]
+		if !ok {
+			return nil, fmt.Errorf("module: reload %q: entry %q is not loaded", entryID, resolved.entry.ID)
+		}
+		if state := instance.State(); state != cordis.Active {
+			return nil, fmt.Errorf("module: reload %q: entry %q is %s; reload requires every closure entry Active",
+				entryID, resolved.entry.ID, state)
+		}
+		if resolved.def.snapshot == nil || resolved.def.restore == nil {
+			missingHooks = append(missingHooks, resolved.entry.ID)
+		}
+		instances = append(instances, instance)
+	}
+	if len(missingHooks) > 0 {
+		return nil, fmt.Errorf("module: reload %q: %w: entries %v", entryID, ErrReloadNotStateful, missingHooks)
+	}
+
+	// Snapshot while the old tree (and all its dependencies) are still alive.
+	snapshots := make(map[string]any, len(instances))
+	for _, instance := range instances {
+		moduleCtx, ok := instance.fiber.Context()
+		if !ok {
+			return nil, fmt.Errorf("module: reload %q: snapshot entry %q: no context", entryID, instance.entryID)
+		}
+		snapshot, err := instance.def.snapshot(moduleCtx)
+		if err != nil {
+			return nil, fmt.Errorf("module: reload %q: snapshot entry %q: %w", entryID, instance.entryID, err)
+		}
+		snapshots[instance.entryID] = snapshot
+	}
+
+	included := make(map[string]bool, len(instances))
+	for _, instance := range instances {
+		included[instance.entryID] = true
+	}
+	roots := make([]*Instance, 0)
+	for _, instance := range instances {
+		if instance.parent == nil || !included[instance.parent.entryID] {
+			roots = append(roots, instance)
+		}
+	}
+	for _, root := range roots {
+		l.removeSubtree(root)
+		containedDispose(root.fiber)
+	}
+
+	// Recreate in load order and restore parent-first.
+	created := make(map[string]*Instance, len(closure))
+	ordered := make([]*Instance, 0, len(closure))
+	for _, resolved := range closure {
+		var parentInstance *Instance
+		if resolved.parent != nil {
+			parentInstance = created[resolved.parent.entry.ID]
+			if parentInstance == nil {
+				parentInstance = l.instances[resolved.parent.entry.ID]
+			}
+		}
+		parentCtx := l.root
+		if parentInstance != nil {
+			fiberCtx, ok := parentInstance.fiber.Context()
+			if !ok {
+				l.discardCreatedMap(created)
+				return nil, fmt.Errorf("module: reload %q: parent entry %q has no context", entryID, parentInstance.entryID)
+			}
+			parentCtx = fiberCtx
+		}
+		newInstance, err := l.createInstance(resolved, parentCtx, parentInstance)
+		if err != nil {
+			l.discardCreatedMap(created)
+			return nil, &LoadError{Issues: []string{err.Error()}}
+		}
+		created[resolved.entry.ID] = newInstance
+		ordered = append(ordered, newInstance)
+	}
+	if err := l.root.WhenIdleContext(context.Background()); err != nil {
+		l.discardCreatedMap(created)
+		return nil, err
+	}
+	for _, instance := range ordered {
+		moduleCtx, ok := instance.fiber.Context()
+		if !ok {
+			l.discardCreatedMap(created)
+			return nil, fmt.Errorf("module: reload %q: restore entry %q: no context", entryID, instance.entryID)
+		}
+		if err := instance.def.restore(moduleCtx, snapshots[instance.entryID]); err != nil {
+			l.discardCreatedMap(created)
+			return nil, fmt.Errorf("module: reload %q: restore entry %q: %w", entryID, instance.entryID, err)
+		}
+	}
+	if issues := l.collectIssues(ordered); len(issues) > 0 {
+		l.discardCreatedMap(created)
+		return nil, &LoadError{Issues: issues}
+	}
+	rootInstance := created[entryID]
+	if rootInstance == nil {
+		l.discardCreatedMap(created)
+		return nil, fmt.Errorf("module: reload %q produced no instance", entryID)
+	}
+	return rootInstance, nil
+}
+
+// Recreate is the explicit state-loss restart: dispose the entry subtree and
+// create it again from the same config. It never runs Snapshot/Restore; callers
+// opt in to losing module state. Prefer Update or Reload.
+func (l *Loader) Recreate(entryID string) (*Instance, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.closed {
 		return nil, fmt.Errorf("module: loader is closed")
 	}
@@ -436,7 +650,7 @@ func (l *Loader) Reload(entryID string) (*Instance, error) {
 			if !ok {
 				created = append(created, nil)
 				l.disposeCreated(created)
-				return nil, fmt.Errorf("module: parent entry %q has no context on reload", parentInstance.entryID)
+				return nil, fmt.Errorf("module: parent entry %q has no context on recreate", parentInstance.entryID)
 			}
 			ctx = fiberCtx
 		}
@@ -448,7 +662,7 @@ func (l *Loader) Reload(entryID string) (*Instance, error) {
 		created = append(created, newInstance)
 	}
 	if len(created) == 0 {
-		return nil, fmt.Errorf("module: reload of %q created no instance", entryID)
+		return nil, fmt.Errorf("module: recreate of %q created no instance", entryID)
 	}
 	if err := l.root.WhenIdleContext(context.Background()); err != nil {
 		l.disposeCreated(created)
@@ -472,10 +686,60 @@ func (l *Loader) disposeCreated(created []*Instance) {
 	}
 }
 
+// discardCreatedMap tears down a partially created reload closure.
+func (l *Loader) discardCreatedMap(created map[string]*Instance) {
+	if len(created) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(created))
+	for id := range created {
+		ids = append(ids, id)
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	for _, id := range ids {
+		instance := l.instances[id]
+		if instance == nil || instance.parent == nil || set[instance.parent.entryID] {
+			continue
+		}
+		kept := instance.parent.children[:0]
+		for _, child := range instance.parent.children {
+			if child != instance {
+				kept = append(kept, child)
+			}
+		}
+		instance.parent.children = kept
+	}
+	for _, id := range ids {
+		instance := l.instances[id]
+		if instance == nil {
+			continue
+		}
+		if instance.parent != nil && set[instance.parent.entryID] {
+			continue
+		}
+		containedDispose(instance.fiber)
+	}
+	for _, id := range ids {
+		delete(l.instances, id)
+	}
+	kept := l.order[:0]
+	for _, instance := range l.order {
+		if !set[instance.entryID] {
+			kept = append(kept, instance)
+		}
+	}
+	l.order = kept
+}
+
 // MissingServices reports the non-optional services an instance is still
 // waiting for (empty when the instance is not Pending, or all requirements are
 // available).
 func (l *Loader) MissingServices(entryID string) []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	instance, ok := l.instances[entryID]
 	if !ok {
 		return nil

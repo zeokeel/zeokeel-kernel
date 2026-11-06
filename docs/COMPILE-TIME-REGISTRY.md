@@ -173,13 +173,16 @@ Loader/Registry 也都是 per-host。**仍建议**：把 BlockingExecutor/orphan
 ### I8. Context 不可变 / 无 reparent（P1）
 
 **问题**：内核 Context 派生后不可变；kernel 没有"把 fiber 移到另一个 parent"或"修改已有
-entry 的 isolate/intercept"的 API。Loader 的 entry 更新只能 dispose + recreate。
-**后果**：reload 会丢失模块实例状态；entry 移动/组变更需要重建子树；无法做官方 loader 的
-`loader/patch-context` 级热 patch。
-**对策（当前）**：把 reload 定义为"实例级重启"，文档化状态丢失；entry 配置里的
-isolate/intercept 变更通过重建子树生效。
-**仍建议**：若需要热 patch：在内核加"context factory + reparent"（复杂、影响生命周期），
-或在 Loader 层做"双实例切换 + 原子绑定"（不移动 fiber，只是先建新、后停旧）。
+entry 的 isolate/intercept"的 API。任何需要重新注册 Context 结构的变更，本质上只能重建 fiber。
+**后果（若简单处理）**：reload 会丢失模块实例状态；entry 移动/组变更需要重建子树。
+**对策（已实现，见 §4.2）**：把 reload 拆成三条路径——
+① 纯配置变更走 `Update`（不重建、不触发依赖、状态零丢失，推荐默认）；
+② 需要重新注册的变更走 `Reload`（重建 fiber，但通过 Snapshot/Restore + 依赖闭包保持状态，
+   不满足条件时在动树之前报错，绝不静默丢状态）；
+③ `Recreate` 是显式状态丢失的重建，仅供调试/明确可丢状态的场景。
+**仍建议**：若未来需要 isolate/intercept 的原地热 patch：内核加"context factory + reparent"
+（复杂）或 Loader 做"双实例切换 + 原子绑定"（先建新、后停旧；当前 isolate scope 下可通过
+隔离上下文实现，但依赖闭包/服务可见性规则需要单独设计）。
 
 ### I9. 服务之外的扩展点（P1）
 
@@ -246,8 +249,10 @@ loader, err := module.Load(root, registry, []module.Entry{
     }},
 })
 defer loader.Close()
-loader.MissingServices("http") // Pending 原因
-loader.Reload("http")         // 实例级重启，entry ID 不变
+loader.MissingServices("http")              // Pending 原因
+loader.Update("database", newConfig)        // 原地更新配置：不重启 fiber、不触发依赖重算
+newInst, _ := loader.Reload("database")     // 状态保持的受控重建（Snapshot/Restore + 依赖闭包）
+loader.Recreate("database")                 // 显式接受状态丢失的重建（可选路径）
 ```
 
 关键语义：
@@ -257,7 +262,51 @@ loader.Reload("http")         // 实例级重启，entry ID 不变
 - `Close` 逆序 dispose（child fiber 级联）；`Reload` 保留 entry ID、重建子树；
 - 内置契约：kernel root 的 `logger` 自动声明为 builtin provider，可 `AddBuiltin` 扩展。
 
-### 4.2 测试覆盖（`go test -race ./module/`，连续多轮通过）
+### 4.2 状态保持的配置更新与 reload（针对「不接受状态丢失」的设计）
+
+用户约束：**不接受 “reload = 实例级重启（状态丢失）”**。因此 loader 区分三种操作：
+
+| 操作 | fiber | 模块状态 | 依赖方 | 适用 |
+| --- | --- | --- | --- | --- |
+| `Update(entryID, cfg)` | **不重建** | 保持 | 不重算（kernel 服务版本不变） | 纯配置变更（推荐默认） |
+| `Reload(entryID)` | 重建（entry ID 不变） | **Snapshot/Restore 保持** | 自动纳入依赖闭包并保持状态 | 需要重新注册资源/effect 的变更 |
+| `Recreate(entryID)` | 重建 | 丢失（显式选择） | 依赖方因版本变化重算 | 明确可丢状态/调试用 |
+
+**Update（原地更新）**
+
+```
+decode+Validate(candidate) → module.Update(ctx, oldCfg, newCfg) → 更新 entry/raw config
+```
+
+- 不调用 kernel 的 `Fiber.Update`，因此不触发 service version bump、不重算 dependents；
+- 模块必须在 `Update` 中就地应用配置；**对外服务句柄必须稳定**（mutate 已有对象/接口，
+  不要替换 service 值），否则依赖方持有的旧句柄会看到旧状态（见风险 R2）；
+- 无 `Update` hook → 返回 `ErrUpdateUnsupported`，**绝不静默重启**；
+- 验证失败/模块拒绝 → 旧配置、旧状态保持不变（模块需自行保证 Update 的原子性）。
+
+**Reload（状态保持重建）**
+
+1. 计算 **reload closure**：entry 子树 + 所有（传递地）required-inject 了该子树所提供服务的
+   loader-managed entry（否则 kernel 的 provider 版本变化会把它们重新激活、丢状态）；
+2. 校验：闭包全部实例必须 Active，且每个模块都实现 Snapshot/Restore；否则**在动任何东西之前**
+   返回 `ErrReloadNotStateful`（旧树保持不变）；
+3. 快照：按 parent-first 加载顺序调用 `Snapshot`（此时旧实例与依赖都还活着）；任一失败 → 中止，
+   旧树不变；
+4. 逆序 dispose 闭包根（child 级联），按 provider-first 调度重建闭包；
+5. 按 parent-first 顺序 `Restore`；随后 WhenIdle + 状态/清单校验；
+6. 任一步失败 → 拆除新实例并返回错误（旧实例已释放，文档标注该失败路径状态丢失）。
+
+**边界与已知限制**
+
+- closure 只覆盖 loader 管理的 entry；模块内部用 `ctx.Plugin` 动态创建的子 fiber 不在闭包内，
+  它们会随父卸载但不会被快照恢复（模块应避免把关键状态放在动态子 fiber，或自行持久化）。
+- Snapshot/Restore 是内存态、同一进程；不做序列化/跨进程迁移。
+- 代码级热更新仍不可能（编译期路线的定义），Reload 只是“实例重建 + 状态迁移”；
+- `Instance` 句柄会随 Reload 更新（entry ID 稳定，fiber/uid 变化）；宿主应以 entry ID 为键；
+- 服务句柄稳定性是 Update 正确性的前提：推荐模块只 `Provide` 一次 long-lived 对象，
+  配置变更后 mutate 其内部字段，而不是重新 provide 新对象。
+
+### 4.3 测试覆盖（`go test -race ./module/`，连续多轮通过）
 
 | 场景 | 结果 |
 | --- | --- |
@@ -272,12 +321,18 @@ loader.Reload("http")         // 实例级重启，entry ID 不变
 | provider 运行时被停 → 依赖方自动 Pending + MissingServices | ✅ |
 | 多宿主/多 registry 隔离 | ✅ |
 | 未声明的 builtin → Load 失败 | ✅ |
+| 原地配置更新：fiber 不变、服务句柄不变、模块状态与依赖激活次数不变 | ✅ |
+| 无 Update hook → `ErrUpdateUnsupported`（不静默重启） | ✅ |
+| 非法配置更新 → 旧配置/旧状态不变 | ✅ |
+| Reload 自动包含依赖闭包，provider+dependent 状态经 Snapshot/Restore 保持 | ✅ |
+| 依赖方缺 Snapshot/Restore → `ErrReloadNotStateful` 且旧树不变 | ✅ |
+| Snapshot 失败 → 中止且旧树不变 | ✅ |
 | 注册表重复注册/非法描述符 → error | ✅ |
 
 > 原型刻意**不改内核**：所有模块系统语义都在 `module` 包完成。这验证了内核对上层扩展的
 > 友好度，也把「内核该不该变大」的决策留到后面。
 
-### 4.3 与官方 loader 的对应关系
+### 4.4 与官方 loader 的对应关系
 
 | 官方 `cordis-plugin-loader` | 本原型 |
 | --- | --- |
@@ -312,16 +367,20 @@ loader.Reload("http")         // 实例级重启，entry ID 不变
    内核外解决，但**团队必须把清单当契约维护**（清单撒谎由运行时校验兜底）。
 3. **信任边界风险**：同二进制模块全可信；一旦要接不可信第三方，必须回到进程/WASM 隔离，
    此时编译期注册表只能作为控制面，不能作为隔离边界。
-4. **演化风险**：模块配置/服务契约随版本演进；没有 contract 包/版本规则 + 配置迁移，
+4. **状态保持的实现风险（新增）**：`Update` 要求模块**稳定对外服务句柄**（原地 mutate，
+   不重新 provide），否则依赖方持有旧句柄；`Reload` 要求模块实现 Snapshot/Restore 且覆盖
+   依赖闭包，闭包外的动态子 fiber 不在保护范围。也就是说“不丢状态”是**模块契约责任**，
+   loader 只能做到“不支持的模块直接报错，绝不静默丢失”。需要在模块模板/评审清单中强制。
+5. **演化风险**：模块配置/服务契约随版本演进；没有 contract 包/版本规则 + 配置迁移，
    跨版本组合会失控。编译期类型检查只能覆盖代码内契约，覆盖不了持久化配置。
-5. **工程复杂度风险**：每个外部插件系统仍要写 Go adapter（即使纯编译期，也要适配其
-   API/生命周期/错误模型）；这不是内核能消除的成本。
+6. **工程复杂度风险**：每个外部插件系统仍要写 Go adapter（即使纯编译期，也要适配其
+   API/生命周期/错误模型，包括 Update/Snapshot 契约）；这不是内核能消除的成本。
 
 ### 5.3 建议的下一步（在这个路线内）
 
 | 优先级 | 事项 | 说明 |
 | --- | --- | --- |
-| P0 | 把 `module` 包从原型硬化 | 错误类型/API 稳定、文档、示例、CI；补 optional 失败策略选项、entry 级 isolate/intercept、配置 reload 策略 |
+| P0 | 把 `module` 包从原型硬化 | 已实现 Update/Reload/Recreate 与状态保持；下一步：错误类型/API 稳定、文档、示例、CI，optional 失败策略选项、entry 级 isolate/intercept、配置持久化/热更触发 |
 | P0 | **ExtensionPoint[T]/Contribution[T] 工具** | 让模块贡献命令/工具/路由等集合项，统一所有权/顺序/冲突 |
 | P0 | 产品装配测试模板 | 每个产品的 entry 配置在 CI 里跑 `Validate`；防止漏配/环/未知模块 |
 | P1 | build tags / 多产品 assembly 模板 | 按产品拆 main + 模块集，控制二进制体积与攻击面 |

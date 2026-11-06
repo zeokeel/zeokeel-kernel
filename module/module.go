@@ -101,6 +101,21 @@ type Descriptor[T any] struct {
 	Decode func(raw cordis.Value) (T, error)
 	// Validate optionally validates the decoded config during pre-flight.
 	Validate func(config T) error
+	// Update applies a new config to the *running* module instance in place.
+	//
+	// When set, Loader.Update validates the candidate and calls Update without
+	// touching the fiber: services, listeners, effects and module state stay
+	// alive, and dependents are not re-activated (the kernel service version is
+	// unchanged). Modules that need re-registration instead of an in-place change
+	// should leave this nil and use Snapshot/Restore plus Reload.
+	Update func(ctx cordis.Context, oldConfig, newConfig T) error
+	// Snapshot captures the module's live state for a state-preserving Reload.
+	// It runs while the old instance and all its dependencies are still alive.
+	Snapshot func(ctx cordis.Context) (any, error)
+	// Restore rehydrates the state returned by Snapshot on the freshly created
+	// instance during Reload. It runs after activation and before the reload
+	// returns.
+	Restore func(ctx cordis.Context, snapshot any) error
 	// Factory is the module body. It runs as the module fiber's activation and
 	// may register services, listeners, effects and child modules through ctx.
 	Factory func(ctx cordis.Context, config T) error
@@ -155,6 +170,25 @@ func (d *Descriptor[T]) WithValidate(validate func(config T) error) *Descriptor[
 	return d
 }
 
+// WithUpdate installs an in-place config update hook (state-preserving config
+// changes without a fiber restart).
+func (d *Descriptor[T]) WithUpdate(update func(ctx cordis.Context, oldConfig, newConfig T) error) *Descriptor[T] {
+	d.Update = update
+	return d
+}
+
+// WithSnapshot installs a state snapshot hook used by state-preserving Reload.
+func (d *Descriptor[T]) WithSnapshot(snapshot func(ctx cordis.Context) (any, error)) *Descriptor[T] {
+	d.Snapshot = snapshot
+	return d
+}
+
+// WithRestore installs a state restore hook paired with Snapshot.
+func (d *Descriptor[T]) WithRestore(restore func(ctx cordis.Context, snapshot any) error) *Descriptor[T] {
+	d.Restore = restore
+	return d
+}
+
 // moduleDef is the type-erased module definition stored by the registry.
 type moduleDef struct {
 	id       string
@@ -164,6 +198,9 @@ type moduleDef struct {
 	requires []Requirement
 	decode   func(raw cordis.Value) (any, error)
 	validate func(config any) error
+	update   func(ctx cordis.Context, oldConfig, newConfig any) error
+	snapshot func(ctx cordis.Context) (any, error)
+	restore  func(ctx cordis.Context, snapshot any) error
 	run      func(ctx cordis.Context, config any) error
 }
 
@@ -233,6 +270,25 @@ func (d *Descriptor[T]) erased() (*moduleDef, error) {
 			return d.Validate(typed)
 		}
 	}
+	var update func(ctx cordis.Context, oldConfig, newConfig any) error
+	if d.Update != nil {
+		update = func(ctx cordis.Context, oldConfig, newConfig any) error {
+			oldTyped, oldOK := oldConfig.(T)
+			newTyped, newOK := newConfig.(T)
+			if !oldOK || !newOK {
+				return fmt.Errorf("module %q: update config has an unexpected type", d.ID)
+			}
+			return d.Update(ctx, oldTyped, newTyped)
+		}
+	}
+	var snapshot func(ctx cordis.Context) (any, error)
+	if d.Snapshot != nil {
+		snapshot = func(ctx cordis.Context) (any, error) { return d.Snapshot(ctx) }
+	}
+	var restore func(ctx cordis.Context, state any) error
+	if d.Restore != nil {
+		restore = func(ctx cordis.Context, state any) error { return d.Restore(ctx, state) }
+	}
 	run := func(ctx cordis.Context, config any) error {
 		typed, ok := config.(T)
 		if !ok {
@@ -248,6 +304,9 @@ func (d *Descriptor[T]) erased() (*moduleDef, error) {
 		requires: append([]Requirement(nil), d.Requires...),
 		decode:   decode,
 		validate: validate,
+		update:   update,
+		snapshot: snapshot,
+		restore:  restore,
 		run:      run,
 	}, nil
 }
