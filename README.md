@@ -209,6 +209,10 @@ watcher, err := loader.WatchFile("assembly.json", module.WatchOptions{Interval: 
 defer watcher.Stop()
 ```
 
+模块自己的 goroutine 用 `module.SafeGo(name, fn)` 启动（`module.SetPanicHandler` 上报），
+避免裸 `go func()` 里的 panic 打崩进程；这是进程内能做的崩溃隔离，fatal/OOM/死循环仍需
+进程 supervisor（详见 COMPILE-TIME-REGISTRY §6）。
+
 `assembly.json` 的每个 entry 的 `config` 在预检阶段解码为模块的 typed config 再交给模块；
 `ApplyEntries/ApplyFile` 做 diff：配置变化优先原地 Update（状态保持），无 Update 的模块默认报错、
 可显式选择状态保持 Reload 或状态丢失 Recreate；新增/删除模块、disabled 翻转会报告 `ChangeAdded/
@@ -239,7 +243,7 @@ make ci      # check + build + test
 当前基线（本地实测）：
 
 - `go test ./...`：内核根包（56 个 smoke/edge/API 测试）+ `conformance/lifecycle`（67）、
-  `conformance/services`（36）、`conformance/runtime`（51）+ `module`（32 个装配/配置热重载测试）+
+  `conformance/services`（36）、`conformance/runtime`（51）+ `module`（34 个装配/配置热重载/崩溃隔离测试）+
   `internal/archtest`（2）全部通过
 - `go test -race ./...`：通过；并发/异步/生命周期用例 `-count=5..20` 稳定
 - 合并覆盖率 **约 80%**（`go test -coverpkg=github.com/zeokeel/cordis-go -coverprofile ... . ./conformance/...`）

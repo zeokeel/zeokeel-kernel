@@ -482,8 +482,70 @@ ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志
 | P2 | HMR/文件监听 | 宿主层 fsnotify；Go 只能实例级重启，不能换代码 |
 | P2 | 进程外/WASM adapter | 仅当确实需要非 Go/不可信插件时（另一条路线，不是本路线的必需项） |
 
+## 6. 热重载真的需要吗？崩溃隔离到哪一层？
+
+### 6.1 热重载不是“正确性需求”，是“运维需求”
+
+先给判定框架，而不是默认全上：
+
+| 场景 | 需要配置热重载吗 | 建议 |
+| --- | --- | --- |
+| 配置变更极少、发布即重启（CLI/桌面/短生命周期服务） | 不需要 | 启动时 `LoadFile`，变更走进程重启；禁用 `WatchFile` |
+| 长生命周期服务/Agent，配置调优/开关变更不想断连 | 需要 | 用 `ApplyFile`（手动触发或发布系统调用），`Update` 原地路径；不要求所有模块支持 |
+| 模块有昂贵状态（连接池/缓存/长任务），重启代价高 | 需要 | `Update` 原地 + 关键模块 `Snapshot/Restore` |
+| 多产品共享二进制、运维希望“改配置不动进程” | 需要 | 配置文件 + diff 热重载；`ApplyError` 接告警/审计 |
+| 需要改代码 | **无法热更新**（编译期路线） | 重新构建 + 进程重启；不要试图用 HMR 掩盖 |
+
+结论：**保留现有热重载能力（已实现、零依赖、可选启用），但不要继续扩张成 loader 生态**
+（YAML include、group、代码 HMR、volatile config 等按需再说）。默认产品可以只做启动时读配置；
+`WatchFile` 只给确实需要长稳运行的产品开。热重载与崩溃隔离是正交的——进程重启本身就是最强的
+崩溃隔离手段，不需要为了隔离去上热重载。
+
+### 6.2 崩溃隔离：内核能兜住什么、兜不住什么
+
+内核的边界保护（`exec.go`/`fiber.go`/`events.go` 等所有调用模块代码的地方都 `recover`）：
+
+| 故障 | 进程内能否隔离 | 当前机制 |
+| --- | --- | --- |
+| 内核调用模块代码时 panic（Activate/Cleanup/事件监听/ConfigSchema/事件/logger/accessor/async cleanup） | ✅ | 恢复为 Failed fiber 或记录错误；单个模块不拖垮宿主 |
+| 模块自己 `panic` 到自己的 goroutine | ❌（Go 无法跨 goroutine recover） | 模块契约：用 `module.SafeGo`/`SafeCall`；或宿主接受进程崩溃 |
+| 模块通过库回调（timer/HTTP handler 等）panic | ❌ 默认 | 模块用 `SafeCall` 包一层；或宿主在入口用统一 recover 中间件 |
+| `fatal error`（并发 map 写、栈溢出等 runtime throw）、OOM、SIGSEGV、`os.Exit`/`log.Fatal` | ❌ 进程级不可恢复 | 进程 supervisor（systemd/k8s/自研）重启；崩溃转储+告警 |
+| 死循环/死锁/无限阻塞 | ❌ Go 无法抢占/杀死 goroutine | L2 watchdog（heartbeat/stalled fibers）只能**观测告警**，不能杀；需进程重启 |
+| 内存/goroutine/FD 耗尽 | ❌ 同进程无 per-module 硬限制 | 进程隔离 + cgroups；内核 L2 配额只限 effect/listener/child 数量，不是内存/goroutine 配额 |
+| unsafe/cgo 导致的段错误 | ❌ | 禁止/隔离（进程外） |
+
+新增的进程内安全原语（`module/safe.go`）：
+
+```go
+module.SetPanicHandler(func(r module.PanicReport) {
+    // 上报指标/告警，决定 Recreate/Reload/隔离该模块
+})
+module.SafeGo("app/ticker", func() { ... })   // 模块自己的 goroutine 必须用这个
+module.SafeCall("app/callback", func() { ... }) // 第三方回调场景
+```
+
+模块契约建议（可 CI 扫描模块包强制）：
+- 模块自己的 goroutine 一律 `module.SafeGo`，不用裸 `go func(){}`；（CI 可用 go/ast 扫描 `go` 语句）
+- 模块不调用 `os.Exit`/`log.Fatal`/`panic`（fatal 边界）；
+- 模块把“无法继续”的错误返回给 kernel/loader，而不是静默死循环；
+- 有昂贵状态的模块实现 `Snapshot/Restore`；能原地变更的实现 `Update`。
+
+### 6.3 隔离级别（按信任边界选，不是全都要）
+
+| 级别 | 机制 | 隔离能力 | 适用 |
+| --- | --- | --- | --- |
+| L0 同进程 + 契约（当前） | kernel panic containment + SafeGo/SafeCall + L2 watchdog/配额 + loader 失败策略 | 普通 panic ✅；fatal/OOM/死循环/unsafe ❌ | 全内部、可信模块（推荐默认） |
+| L1 进程分组隔离（可选宿主层） | 每组模块跑在子进程（同一编译期二进制 + subcommand；kernel fiber 管理并监督子进程） | 崩溃/死循环/内存可被 OS 隔离，父进程可重启组 | 关键模块、第三方/实验模块、需要“一个模块崩不拖垮宿主” |
+| L2 WASM/容器 | 跨语言/沙箱 | 最强 | 仅当需要非 Go 或不可信代码（本路线明确排除；容器/VM 更现实） |
+
+**建议**：默认走 L0（满足绝大多数内部模块）；把“崩溃隔离”当产品需求明确下来——如果要求
+“任意模块 fatal/死循环/内存爆炸都不能影响宿主”，就必须给这些模块做 L1 进程隔离（编译期注册表
+仍然成立：子进程加载的是同一二进制里的模块集，不是动态加载外部代码），代价是 RPC/IDL 与状态
+序列化。不要为可信模块预先引入进程隔离的复杂度。
+
 **最终判断**：作为一个「Go 生态内、多产品共享、静态链接、可配置组合」的内核，**设计思想
 核心是成立的**；真正需要在设计阶段定死的不是内核，而是模块系统的三件事：
 **清单契约（provides/requires/config）**、**预检与失败策略**、**实例身份与装配纪律**。
-这三件在 `module` 原型里已经跑通。剩下的风险是目标语义（编译期 vs 运行时热插拔）与
-信任边界（同进程可信 vs 沙箱），必须在产品层面拍板。
+这三件在 `module` 原型里已经跑通。至于热重载：保留为**可选运维能力**，不是内核必需；
+崩溃隔离：L0 的 panic 边界 + 模块契约够用，硬隔离需求出现时再加 L1 进程层，不必现在做。
