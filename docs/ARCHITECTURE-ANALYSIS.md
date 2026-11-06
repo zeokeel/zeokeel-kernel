@@ -8,8 +8,9 @@
 > **配套**：深度分析 [01](analysis/01-context-services.md) [02](analysis/02-fiber-lifecycle.md)
 > [03](analysis/03-registry-events.md) [04](analysis/04-runtime-config-logger.md)
 > [05](analysis/05-core-cases.md)；可行性 [GO-FEASIBILITY.md](GO-FEASIBILITY.md)；
-> Go 设计 [GO-DESIGN.md](GO-DESIGN.md)。Go 侧为 v0 骨架（提交 `401c55f`，部分文件并行演进），
-> 现状以 GO-DESIGN 的“已实现/简化”清单为准。
+> Go 设计 [GO-DESIGN.md](GO-DESIGN.md)。Go 侧截至本稿已落地内核主体、conformance（154 测试，
+> 覆盖 51/51 CORE）+ 根包 55 个 smoke/edge 测试、archtest 与 CI；具体现状以 GO-DESIGN 的
+> “已实现/简化”清单为准。
 
 ---
 

@@ -113,6 +113,10 @@ type LeveledLogExporter interface {
 // LoggerService.bufferSize).
 const DefaultBufferSize = 1000
 
+// LoggerKey is the typed handle of the built-in logger service, installed on the
+// root context (Cordis `ctx.get(LOGGER)`).
+var LoggerKey = NewServiceKey[*LoggerService]("logger")
+
 // LoggerService is the logging service shared by a context tree.
 type LoggerService struct {
 	level      atomic.Uint32

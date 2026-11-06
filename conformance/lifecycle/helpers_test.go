@@ -9,6 +9,8 @@ package lifecycle_test
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +18,32 @@ import (
 
 	cordis "github.com/zeokeel/cordis-go"
 )
+
+// childEnv marks a re-executed child test binary. Some CORE cases depend on
+// process-global state (the BlockingExecutor is install-once; the orphan queue
+// only receives async cleanups while no executor exists), mirroring the Rust
+// reference's separate integration-test binaries. Running those tests in a
+// fresh child process makes them independent of test order and of -count
+// iterations.
+const childEnv = "CORDIS_LIFECYCLE_CHILD"
+
+// runInFreshProcess re-executes the named test in a clean child test binary.
+func runInFreshProcess(t *testing.T, name string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0],
+		"-test.run=^"+name+"$",
+		"-test.count=1",
+		"-test.timeout=120s",
+	)
+	cmd.Env = append(os.Environ(), childEnv+"="+name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s child process failed: %v\n%s", name, err, output)
+	}
+}
+
+// inFreshProcess reports whether the current process is that test's child.
+func inFreshProcess(name string) bool { return os.Getenv(childEnv) == name }
 
 // awaitTimeout is the upper bound used by every channel wait / poll loop in
 // this package. The kernel does the work on goroutines, so the suite waits on

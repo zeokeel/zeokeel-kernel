@@ -169,7 +169,7 @@ func TestCore026_UIDClearedOnDispose(t *testing.T) {
 		t.Fatalf("dispose: %v", err)
 	}
 	if uid, ok := fiber.UID(); ok {
-		t.Skipf("KERNEL-GAP: Fiber.UID() = %d/true after dispose, want none/false; fiberData.uid is never cleared on unload (fiber.go finishUnload)", uid)
+		t.Fatalf("Fiber.UID() = %d/true after dispose, want 0/false (CORE-026 clears the uid)", uid)
 	}
 }
 
@@ -188,9 +188,7 @@ func TestCore026_AssertActiveAfterDisposeIsInactiveEffect(t *testing.T) {
 	if err == nil {
 		t.Fatal("AssertActive on a disposed fiber returned nil")
 	}
-	if code, ok := cordis.CodeOf(err); !ok || code != cordis.CodeInactiveEffect {
-		t.Skipf("KERNEL-GAP: AssertActive after dispose = %v (%v), want Err(InactiveEffect); Fiber.AssertActive returns PluginFailedError instead (fiber.go AssertActive)", err, code)
-	}
+	assertCode(t, err, cordis.CodeInactiveEffect)
 }
 
 func TestCore026_AwaitSettledRethrowsStartupErrors(t *testing.T) {

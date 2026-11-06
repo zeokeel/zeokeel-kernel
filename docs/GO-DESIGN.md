@@ -6,10 +6,10 @@
 > [ARCHITECTURE-ANALYSIS.md](ARCHITECTURE-ANALYSIS.md)，逐用例断言见
 > [05-core-cases](analysis/05-core-cases.md)。
 >
-> **状态快照（2026-11-06 14:06，HEAD `401c55f` + 工作区）**：内核主体、`conformance/`（约 150 个测试，
-> 覆盖 50/51 CORE，037 待补）、`internal/archtest`、`examples/`（4 个）、CI/Makefile 已落地；
-> `context.go`/`fiber.go`/`internal.go` 等仍在并行收尾。本文以工作区当前代码为准，未合并的改动可能
-> 带来细节差异；`conformance/` 的实际测试名以仓库为准。
+> **状态快照（2026-11-06 14:20，工作区最终状态）**：内核主体、`conformance/`（154 个测试，
+> 覆盖 51/51 CORE）、根包 smoke/edge 测试（55 个）、`internal/archtest`（2 个）、`examples/`（4 个）、
+> CI/Makefile 全部落地；`go test -race ./...` 与 `scripts/ci.sh` 全绿，合并覆盖率 80.7%
+> （`-coverpkg` 汇总）。
 
 ---
 
@@ -52,8 +52,8 @@
   `LogLevel`（Error=0…Debug=3）、ring buffer、exporter、`SlogExporter`、facade clock 快照、
   `SetClock` 仅 root、`FiberQuota`（effects/listeners/child fibers 实测）、`IsolationCapabilities`、
   `StalledFibers`。
-- **错误与工程化**：17 个 `ErrCode` + `CordisError`/sentinels/`errors.Is`；`conformance/`（3 包 约 150 测试，
-  覆盖 50/51 CORE）、`internal/archtest`（import 边界 + 420 API cap + 自测）、`examples/`（4 个）、
+- **错误与工程化**：17 个 `ErrCode` + `CordisError`/sentinels/`errors.Is`；`conformance/`（3 包 154 测试，
+  覆盖 51/51 CORE）、`internal/archtest`（import 边界 + 420 API cap + 自测）、`examples/`（4 个）、
   `.github/workflows/ci.yml`、`scripts/ci.sh`、`Makefile`、`README.md`。
 
 ### 0.2 简化/差异（有意为之）
@@ -63,11 +63,10 @@
 | `Drop` 安全网 | 无；显式 `Dispose`/`DisposeAll`/`Abandon` | 丢句柄不清理 |
 | `Weak` 存活 | provider/root 用 `weak.Pointer`，但可用性由 `State()` 判 | 不依赖 GC 时点 |
 | 双 lane | 合并为 `any`，无 `ArcWrap`/lane 标记 | CORE-032 接口用例可过，但原 lane 身份规则丢失 |
-| 反向依赖索引 | 简化版 `depIndex`（inject 名→fiber ids）仅用于 **cascade**；refresh 仍全量扫描 | cascade 按受影响 dependent 收敛；refresh 大 fanout 仍是 O(F×64) |
+| 反向依赖索引 | 简化版 `depIndex`（inject 名→fiber ids）+ `dirtyServices` 快路径：cascade 与 dependents 刷新按受影响 fiber 收敛；显式 `Refresh/RefreshAsync` 仍是全量有界固定点（≤64 轮） | 常用路径近 O(受影响集)；显式全量刷新大 fanout 仍是 O(F×64) |
 | 迭代级联 | 依赖 dependent 已两阶段 `beginCascade`+逆序 drain；ownership 子树仍靠 effect cleanup 递归 | 注入链近 O(1) 帧；父子链依赖 Go 栈增长 |
 | `FiberSlots` | slice 线性删除 | 大 fanout 删除 O(n) |
 | parked cascade | 未实现；取消卸载逐帧完成 | CORE-046 的 F1/F4/F5 N/A |
-| sync `Refresh` 与 async | Pending async 不激活，但 Active async 会被 blocking 卸载 | CORE-037 与 Rust 的“跳过”不一致 |
 | `EffectFuture` | 只接收已求值 cleanup | 无 async future body |
 | supervision | 始终开启，无 build tag | 默认 API 面更大 |
 | 日志 | `log/slog` + `SlogExporter` | 无 tracing span |
@@ -76,7 +75,7 @@
 ### 0.3 未实现 / 待补
 
 `FiberSlots`/O(1) 删除、refresh 的 dirty/索引快路径（目前只 cascade 用索引）、parked cascade/recovery、
-无自带 `block_on`（只需可选 `BlockingExecutor`）、supervision build tag、`Context.SetQuota` 转发；测试侧还缺 CORE-037、
+无自带 `block_on`（只需可选 `BlockingExecutor`）、supervision build tag、`Context.SetQuota` 转发；测试侧还缺
 property/redteam/api_surface/blocking 专项、benchmark；`EffectFuture` 的 body 版本。详见 §8 路线图。
 
 ---
@@ -120,7 +119,7 @@ v0 是**单包** `cordis`（模块 `github.com/zeokeel/cordis-go`，Go 1.27）�
 | `l2.go` | 配额/能力/watchdog | `FiberQuota`、`IsolationCapabilities`、`StalledFiber`、`StalledFibers` |
 | `smoke_test.go` | 12 个冒烟测试（根包 `_test`） | 见 §9/§10 |
 | `kernel_edge_test.go` | 并行成员补充的边缘测试（工作区，覆盖部分 CORE-006/021/024/039-049） | 见 §9.1 |
-| `conformance/lifecycle/` | CORE-001/007-009/011-012/026-029/034-036/038-039/043-047/050-051 | 约 150 个测试之一部分 |
+| `conformance/lifecycle/` | CORE-001/007-009/011-012/026-029/034-039/043-047/050-051 | 67 个测试 |
 | `conformance/runtime/` | CORE-017-021/023-024/031/049（events/config/logger/clock/quiescence） | — |
 | `conformance/services/` | CORE-002-006/010/013-016/022/025/032-033/040-042/048 | — |
 | `internal/archtest/` | import 边界 + 420 导出 API cap + 扫描器自测 | `TestKernelBoundary` |
@@ -371,9 +370,8 @@ effect cleanup 递归 `child.Dispose()`，深父子链依赖 Go 栈增长；非�
 
 `Refresh`：`refreshMu.TryLock`（失败置 dirty 返回）→ 最多 64 轮：`refreshDirty=false`，`refreshPass`
 遍历快照；Active 且 !satisfied→`unloadForRefresh(Pending)`（claim lifecycle，busy 跳过）；Pending 且
-ready→activate；有 changed 或 dirty 则继续。`RefreshAsync` 用 `refreshPassAsync`。v0 的 refreshPass
-**不区分 async fiber**（Rust 的 sync refresh 跳过全部 async）；同步模式不会激活 Pending async，但
-Active async 会被 blocking 卸载（路线图 P0）。
+ready→activate；有 changed 或 dirty 则继续。`RefreshAsync` 用 `refreshPassAsync`。sync `refreshPass` 对 `isAsyncPlugin()` **直接跳过**（Rust 语义）；
+async 插件的激活/卸载只由 `RefreshAsync` 推进。
 
 ### 5.5 busy/reentrancy
 
@@ -402,8 +400,8 @@ Active async 会被 blocking 卸载（路线图 P0）。
   依赖 ready 则 activate；失败 restorePluginMetadata+reloadAfterRestore。
 - `Registry.Replace`：resolveMetadata→找 old runtime（空/不存在→InvalidPlugin）→bindReplacement（删
   old key、merge/new target、逐 fiber swap+rebind）→逐 fiber Restart；任一失败→重启已 reload 的 fiber+
-  undoBind。v0 的 undo 重建 runtime 对象（不保留原 runtime 身份）；**swap/restore 改变 inject 后
-  未调用 `reindexFiberDeps`**，替换后 depIndex 可能保留旧边（已知缺口，见 §8）。
+  undoBind。v0 的 undo 重建 runtime 对象（不保留原 runtime 身份）；swapPluginMetadata/
+  restorePluginMetadata 都会调用 `reindexFiberDeps`，替换后 depIndex 与新的 inject 声明一致。
 
 ### 5.8 静默
 
@@ -480,7 +478,7 @@ Go 没有 reactor 线程 park 死锁的同一问题，因此默认 inline 是合
 | 4 | future drop 取消 | 隐式 drop 点 + CancelSafe 收尾 | `ctx.Done()`；未启动 restore、in-flight 丢失；无 parked | L2 |
 | 5 | BlockingExecutor | 同步 dispose 默认 thread-park block_on；CORE-034 必走 executor | 默认 inline；安装后同步卸载走 executor（CORE-034 已覆盖）；无 block_on | L1 |
 | 6 | supervision | `#[cfg(feature)]`，默认关闭 | 始终开启，无 build tag | L1 |
-| 7 | 反向依赖索引 | `DepIndex` + dirty 快路径 | cascade 用简化 `depIndex`；refresh 仍全量 | L1（性能） |
+| 7 | 反向依赖索引 | `DepIndex` + dirty 快路径 | cascade 与 dependents 刷新用 `depIndex`+`dirtyServices`；显式 Refresh 全量 | L2（性能，已缓解） |
 | 8 | 迭代级联 | 显式 DFS 栈，O(1) 调用栈 | dependent 两阶段迭代；ownership 子树递归 | L1（结构） |
 | 9 | FiberSlots | tombstone + positions，O(1) 删除 | slice 线性删除 | L1（性能） |
 | 10 | 双 lane | sized/any + `ArcWrap` TypeId | `any` 合并；无 lane 标记 | L2 |
@@ -496,19 +494,18 @@ Go 没有 reactor 线程 park 死锁的同一问题，因此默认 inline 是合
 | 20 | 深度限制 | 256（fiber parent chain） | 相同（`MaxPluginDepth=256`） | L0 |
 | 21 | 事件 async options | async lane 只有 prepend | `OnAsyncWith(prepend,global)` 也支持 global | L1 |
 | 22 | `Entries` | `Vec<(key,runtime)>` | `map[PluginKey]*PluginRuntime` | L1 |
-| 23 | sync Refresh 与 async | `refresh()` 跳过所有 async fiber | Pending async 不激活，但 Active async 会被 blocking 卸载 | L2 |
+| 23 | sync Refresh 与 async | `refresh()` 跳过所有 async fiber | 已对齐：`refreshPass` 对 async plugin 直接跳过 | L0 |
 
 ---
 
 ## 8. 已知简化与路线图
 
 **已完成（本快照）**：CORE-022 `Delete` 隐式 dispose、CORE-026 UID/AssertActive、CORE-034
-BlockingExecutor、CORE-041 `SetRevertibleNamed`；`conformance/`、`internal/archtest`、`examples/`、
+BlockingExecutor、CORE-037 sync Refresh 跳 async、CORE-041 `SetRevertibleNamed`；`conformance/`、`internal/archtest`、`examples/`、
 CI/`-race` 矩阵均已落地。
 
 | 优先级 | 项 | 现状 | 计划 |
 |---|---|---|---|
-| **P0** | sync `Refresh` 跳过 async fiber | 会 blocking 卸载 Active async（CORE-037） | `refreshPass` 对 `isAsync` 直接跳过（Rust 语义）；补 CORE-037 测试 |
 | **P0** | Replace 后重索引 | `swapPluginMetadata`/`restorePluginMetadata` 改变 inject 但未 `reindexFiberDeps` | 在 swap/restore 后调用重索引；补替换后 cascade 的 conformance |
 | **P0** | internal hook panic fallback | `internal.go` 正在并行收尾 | 以最终代码为准，补 conformance panic 矩阵（CORE-021/containment） |
 | **P1** | 索引快路径 | cascade 用简化 `depIndex`；refresh 全量 O(F×64) | 增加 `service_dirty`/候选过滤，保留“索引不决定可用性”原则 |
@@ -528,18 +525,17 @@ CI/`-race` 矩阵均已落地。
 
 ### 9.1 现状
 
-- `conformance/`（约 150 测试，3 包，只依赖公共 API）：`TestCoreNNN_*` 覆盖 50/51 CORE；唯一缺口是
-  CORE-037（sync Refresh 与 async）。
+- `conformance/`（154 测试，3 包，只依赖公共 API）：`TestCoreNNN_*` 覆盖 51/51 CORE。
 - `smoke_test.go`（12 个）覆盖主路径；`kernel_edge_test.go`（15 个）覆盖 LifecycleBusy/重入、replace、
   when_idle 窗口、AsyncDisposer 取消等边缘。
 - `internal/archtest`（2 个）：内核 import 边界（标准库白名单、禁 IO/网络/业务词/自引用）+ 420 导出
   API cap + 扫描器自测；`examples/` 4 个骨架；CI 跑 gofmt/vet/build/test/`-race`。
-- **缺口**：CORE-037；property/redteam/api_surface/blocking 专项；benchmark。
+- **缺口**：property/redteam/api_surface/blocking 专项；benchmark。
 
 ### 9.2 conformance 目录与 CORE 归属（实际）
 
 ```
-conformance/lifecycle/   async_test(034/043/046)  effects_test(007-009/011-012/030)
+conformance/lifecycle/   async_test(034/037/043/046)  effects_test(007-009/011-012/030)
                          fiber_test(001/026-029/035-036/038-039/044-045/047/050-051)
 conformance/runtime/     config_logger_test(023/024)  events_test(017-021/031)
                          quiescence_test(049)
@@ -549,7 +545,7 @@ conformance/services/    context_test(003/025/040)  registry_test(022/048)
 ```
 
 每个测试包各有 `helpers_test.go`（`newRoot`、`waitFor`、`assertState`、`assertOrder`、watchdog）；
-CORE-037 尚无测试（P0）。
+每个 CORE 均有对应测试（含 CORE-037 的 async 注入门用例）。
 
 ### 9.3 纪律与工具
 
@@ -614,7 +610,7 @@ CORE-037 尚无测试（P0）。
 | 034 | BlockingExecutor | lifecycle/async | conf |
 | 035 | AsyncPlugin 生命周期 | lifecycle/fiber | conf |
 | 036 | async 失败回滚 | lifecycle/fiber | conf |
-| 037 | sync refresh 不碰 async | — | **待补（P0）** |
+| 037 | sync refresh 不碰 async | lifecycle/async | conf |
 | 038 | inline async drain | lifecycle/fiber | conf |
 | 039 | restart 重查 gate | lifecycle/fiber | conf |
 | 040 | raw config 不复合 | services/context | conf |
@@ -630,7 +626,7 @@ CORE-037 尚无测试（P0）。
 | 050 | cancel/checkpoint | lifecycle/fiber | conf |
 | 051 | dispose_all | lifecycle/fiber | conf |
 
-> 说明：`conformance/` 实际约 150 个测试，覆盖 50/51 CORE；CORE-037 待 P0 修复后补测。
+> 说明：`conformance/` 实际 154 个测试，覆盖 51/51 CORE；根包另有 55 个 smoke/edge 测试。
 > CORE-033 的 Rust 断言是“无强环”，Go 用 GC/finalizer 探针改写；CORE-046/049 的 parked/recovery
 > 部分在 Go 中 N/A（见 §6.2）。测试断言以仓库当前版本为准。
 ---
@@ -640,8 +636,8 @@ CORE-037 尚无测试（P0）。
 v0 用约 8.1k 行 Go + 7.5k 行 conformance 实现了 Rust 内核的全部**组合原语**与大多数可观察语义；
 主要简化集中在**确定性析构、Weak 存活、thread-local 执行帧、future drop 取消、TypeId/泛型**五处，
 以及**refresh 索引快路径/parked recovery/FiberSlots** 三项性能/边界设施；均有显式替代或 N/A 标注。
-下一步优先补 **CORE-037**（sync Refresh 跳 async）与剩余专项测试（property/redteam/blocking/bench），
-再按需引入 P1 索引/显式栈；保持“代码现状 ↔ 文档承诺 ↔ 测试断言”三者一致。
+下一步优先补剩余专项测试（property/redteam/blocking/bench）与显式 Refresh 候选过滤，再按需引入
+P1 refresh 索引/ownership 显式栈；保持“代码现状 ↔ 文档承诺 ↔ 测试断言”三者一致。
 
 → 语言机制与风险见 [GO-FEASIBILITY.md](GO-FEASIBILITY.md)；
 → Rust 语义与证据见 [ARCHITECTURE-ANALYSIS.md](ARCHITECTURE-ANALYSIS.md)。

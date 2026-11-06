@@ -11,7 +11,7 @@
 > [05-core-cases](analysis/05-core-cases.md)。
 >
 > **快照**：2026-11-06 14:05，Go 工作区（HEAD `401c55f` + 并行成员改动）。当前已落地内核主体、
-> `conformance/`（约 150 个测试，覆盖 50/51 CORE；037 待补）、`internal/archtest`、`examples/` 与 CI；
+> `conformance/`（154 个测试，覆盖 51/51 CORE）、`internal/archtest`、`examples/` 与 CI；
 > `context.go` 等仍在并行收尾。行号不用于 Go（会漂移），一律引用文件与符号；Rust 行号相对
 > `reference/zeokeel-cordis-rust/`。
 
@@ -279,14 +279,13 @@ internal hooks、config/logger/clock、replace、dispose_all、checkpoint。
 ### 3.2 必须重新定义或改写断言的用例
 
 > 工作区当前已对齐 **022（Delete 隐式 dispose）、026（UID 清空 / AssertActive→InactiveEffect）、
-> 034（BlockingExecutor 可安装并可断言）、041（`SetRevertibleNamed`）**，并且 conformance 已覆盖；
-> 这四项不再属于重定义。
+> 034（BlockingExecutor 可安装并可断言）、037（sync Refresh 跳过 async）、041（`SetRevertibleNamed`）**，
+> 并且 conformance 已覆盖；这些项不再属于重定义。
 
 | CORE | 原语义 | Go 重定义 | 原因 |
 |---|---|---|---|
 | **027** | async effect body 失败→激活失败；stream 逆序 | v0 `EffectFuture` 只接收**已求值** cleanup，没有 future body；stream 已实现 | API 简化；body 失败需由调用方在 `EffectAsync` 内返回 error 表达 |
 | **033** | root 图无强引用环（`Arc::downgrade` 后 upgrade 为 None） | 由 Go GC 保证可达性；conformance 用 finalizer/GC 探针断言“可回收” | 无引用计数；Rust 的强环语义不可直接观测 |
-| **037** | async 插件的 inject 门只在 `refresh_async` 时重评估；sync `refresh()` **完全跳过** async fiber | v0 sync `Refresh` 不会激活 Pending async fiber，但对 **Active 且依赖不满足的 async fiber 会执行 blocking 卸载**；Rust 是直接跳过 | 同步 `Refresh` 的“不碰 async”语义未完全保留；conformance 尚未覆盖（P0） |
 | **045** | 生命周期互斥基于 operation token；同线程重入允许，async 任务迁移线程后语义不变 | v0 用 **goroutine id** 识别重入；同一 goroutine 内 cleanup 自 dispose 可重入；跨 goroutine（含 async 操作迁移）一律 Busy | Go 无任务本地 token 传播；除非所有 async API 都显式传 operation handle |
 | **046** | AsyncDisposer 恢复未启动项（S-1）；fiber 取消卸载完成 teardown（A-9）；**parked cascade 帧 + F1/F4/F5 恢复** | v0 实现 S-1/A-9/self-join/偶发 in-flight 丢失；**未实现 parked 帧与 recovery**（取消卸载逐帧完成，不停摆） | Go 的取消路径可以同步/异步完成每一帧，不需要“停摆帧”；但取消时可能长时间阻塞，且没有“恢复被取消级联”的独立入口 |
 | **049** | `when_idle` recovery-aware，等待期间恢复 parked 帧；排除调用线程自己的注册（ThreadId） | v0 `IsIdle` 严格 + `WhenIdleContext` 排除**当前 goroutine** 的注册；无 recovery 循环（无 parked 帧） | 无 parked 帧 → 无需 recovery；ThreadId→goid；两线程互等注册窗口仍可死锁（与 Rust 相同未检测） |
@@ -351,7 +350,7 @@ internal hooks、config/logger/clock、replace、dispose_all、checkpoint。
 | 034 | 1:1 | 安装 `BlockingExecutor` 后同步卸载经其执行并可断言计数；默认 inline 是与 Rust 的差异 |
 | 035 | 1:1 | AsyncPlugin 激活/卸载 |
 | 036 | 1:1 | async 失败回滚并 await cleanup |
-| 037 | 部分 | sync Refresh 不激活 async，但会 blocking 卸载 Active async（Rust 跳过） |
+| 037 | 1:1 | sync `refreshPass` 跳过 async plugin；`RefreshAsync` 才推进 async 激活/卸载；conformance 覆盖 |
 | 038 | 1:1 | 失败同步激活 inline drain async |
 | 039 | 1:1 | restart 后仍检查依赖 |
 | 040 | 1:1 | raw/resolved 分离，不复合 |
@@ -363,12 +362,12 @@ internal hooks、config/logger/clock、replace、dispose_all、checkpoint。
 | 046 | 部分 | S-1/A-9/self-join 已实现；parked 帧与 F1/F4/F5 未实现 |
 | 047 | 1:1 | 顺序/回滚/有界记账可保；注入依赖链两阶段迭代，ownership 子树仍递归（Go 栈增长） |
 | 048 | 1:1 | 身份/raw config/失败回滚；`Ok≠Active` 需断言 State/ErrorDetail |
-| 049 | 重定义 | 无 parked recovery；自身注册排除用 goid；严格 IsIdle 保留 |
+| 049 | 部分 | 无 parked recovery（N/A）；自身注册排除用 goid；严格 IsIdle/WhenIdle 契约保留 |
 | 050 | 1:1 | Cancel + Checkpoint |
 | 051 | 1:1 | 全尝试 + panic 优先 + 幂等；Miri 泄漏改为 goroutine/资源基线 |
 
-**汇总**：45 项可直接 1:1（含 020/021 的细节差异、032 的 lane 合并、034 的默认 inline 差异）；
-2 项重定义（045/049）；3 项部分（027/037/046）；1 项 N/A（033）。
+**汇总**：46 项可直接 1:1（含 020/021 的细节差异、032 的 lane 合并、034 的默认 inline 差异）；
+1 项重定义（045）；3 项部分（027/046/049）；1 项 N/A（033）。
 
 ---
 
@@ -453,11 +452,11 @@ drain frames），不再递归；**ownership 子树**仍通过 effect cleanup �
 | R3 | 无泛型方法导致 API 形态固定 | 高 | 所有下游代码 | 泛型自由函数；key 常量 | 已在 v0 定案 |
 | R4 | 取消时 in-flight cleanup 丢失 | 中高 | `DisposeAsync` 取消 | 文档边界；deferred 重试；测试 | 接受（与 Rust A-9 类似） |
 | R5 | 无 parked 帧恢复 | 中 | 级联取消 | 逐帧完成；不暴露“恢复”API；文档 | 接受/后续补 |
-| R6 | refresh 仍全量扫描 | 中 | 大 fanout / 频繁 set | 简化 depIndex 已用于 cascade；P1 补 refresh dirty/候选 | 排期 |
+| R6 | 显式 refresh 仍全量扫描 | 中 | 大 fanout / 频繁 set | dependents 刷新已用 depIndex+dirty；显式 Refresh 全量（P1 可加候选过滤） | 缓解 |
 | R7 | ownership 子树递归栈增长 | 中 | 深父子链 / churn | Go 栈 + MaxPluginDepth；P1 显式帧栈 | 接受 |
 | R8 | recover 跨 goroutine 无效 | 中 | 用户自起 goroutine | 文档；每个入口 recover | 契约 |
 | R9 | lane 合并丢失类型安全 | 中 | 接口服务/any 注册 | 文档；类型校验；测试 | 接受 |
-| R10 | 残余语义差：037（sync Refresh 碰 async）、046（无 parked）、049（无 recovery/goid）、045（goid 迁移）、032（lane 合并）、Replace 后 depIndex 未重索引 | 中 | 迁移用户/并发取消/热替换 | conformance 显式标注；P0 补 037 与重索引；其余文档化 | Lead 确认 |
+| R10 | 残余语义差：046（无 parked）、049（goid 注册表而非线程 id）、045（goid 迁移）、032（lane 合并） | 中 | 迁移用户/并发取消/热替换 | 已在 GO-DESIGN §7 逐项文档化并标注 N/A 边界；conformance 覆盖可观察行为 | 接受 |
 
 ---
 
@@ -468,10 +467,11 @@ drain frames），不再递归；**ownership 子树**仍通过 effect cleanup �
 2. **不能 1:1 的只有 5 类**：确定性析构（Drop）、弱引用存活语义、线程局部执行帧（thread_local）、
    future drop 取消、TypeId/泛型方法；它们分别被显式 Dispose/Abandon、显式状态、goid+ctx、
    ctx 取消、reflect.Type+泛型自由函数替代。
-3. **CORE 51 例中**：45 例可直接按原断言实现（conformance 已覆盖 50/51，仅 037 待补）；`033` 标记
-   N/A（GC 探针）；`045/046/049` 需按 Go 语义改写断言（goid/parked/recovery）；`027/037` 为部分实现。
-4. **性能**：cascade 已用简化 depIndex 收敛；refresh 全量在中小树可接受；大 fanout/深父子链/高吞吐
-   日志还需 refresh 索引、ownership 显式栈、环形 buffer 三项优化（路线图）。
+3. **CORE 51 例中**：46 例可直接按原断言实现（conformance 已覆盖 51/51）；`033` 标记 N/A（GC 探针）；
+   `045` 重定义（goid），`027/046/049` 为部分实现（EffectFuture body/parked/recovery）。
+4. **性能**：cascade 与 dependents 刷新已用 depIndex+dirty 快路径收敛；显式 refresh 全量在中小树
+   可接受；大 fanout/深父子链/高吞吐日志还需显式 Refresh 候选过滤、ownership 显式栈、环形 buffer
+   三项优化（路线图）。
 5. **工程建议**：保留 `BlockingExecutor` seam、`Abandon`+orphan、9 个 internal hook、lifecycle
    广播、可注入 Clock 等 Rust-only 扩展；把“同步 Dispose 禁止在事件循环 goroutine 调用”写入契约。
 

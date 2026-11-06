@@ -29,12 +29,18 @@ import (
 // bounded orphan queue when no BlockingExecutor is installed, and
 // DrainOrphanAsyncCleanups recovers them exactly once.
 //
-// It is declared before TestCore034 (which installs the process-global blocking
-// executor) because Abandon routes async cleanups to the orphan queue only
-// while no executor exists.
+// The orphan queue only receives cleanups while no BlockingExecutor exists, so
+// this test runs in its own child process (see runInFreshProcess).
 func TestCore046_OrphanAbandonRecoveryObservability(t *testing.T) {
+	if !inFreshProcess("TestCore046_OrphanAbandonRecoveryObservability") {
+		// Abandon routes async cleanups to the orphan queue only while no
+		// BlockingExecutor is installed; a clean process keeps this independent of
+		// the CORE-034 install and of -count iterations.
+		runInFreshProcess(t, "TestCore046_OrphanAbandonRecoveryObservability")
+		return
+	}
 	if cordis.HasBlockingExecutor() {
-		t.Skip("KERNEL-TEST-ORDER: a blocking executor is already installed; Abandon routes to it instead of the orphan queue")
+		t.Fatal("fresh child process already has a blocking executor installed")
 	}
 	root := newRoot(t)
 	tr := &trace{}
@@ -284,11 +290,16 @@ func TestCore046_CancelledDisposeAsyncRetryDrainsDeferred(t *testing.T) {
 		t.Fatalf("retried DisposeAsync: %v", err)
 	}
 	if got := olderRuns.Load(); got != 1 {
-		t.Skipf("KERNEL-GAP: retried Fiber.DisposeAsync did not drain the deferred async cleanup (runs = %d, want 1); "+
-			"drainEffectsAsync parks batch.deferred again instead of running it (fiber.go unload/drainEffectsAsync). "+
-			"Sync Fiber.Dispose() retry does drain it.", got)
+		t.Fatalf("retried DisposeAsync did not drain the deferred async cleanup (runs = %d, want 1)", got)
 	}
 	assertOrder(t, tr.snapshot(), []string{"older"})
+	// Retrying again is a no-op: the deferred tail is single-shot.
+	if err := fiber.DisposeAsync(context.Background()); err != nil {
+		t.Fatalf("third DisposeAsync: %v", err)
+	}
+	if got := olderRuns.Load(); got != 1 {
+		t.Fatalf("deferred async cleanup ran more than once (runs = %d)", got)
+	}
 }
 
 // TestCore046_CancelledTeardownWakesJoiner covers the joiner-release boundary
@@ -538,6 +549,160 @@ func TestCore043_ConcurrentAsyncDisposeJoinsInflight(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CORE-037: an AsyncPlugin's inject gate is re-evaluated on refresh_async; the
+// synchronous refresh intentionally does not activate async fibers.
+// (hardening.rs::async_plugin_waits_for_inject_and_refresh_async)
+//
+// Go mapping note: the Rust test provides the service and then calls
+// `refresh()` before `refresh_async()`; in Go ctx.Provide already triggers the
+// synchronous Refresh internally, so the synchronous-refresh-still-Pending
+// assertion is made both right after Provide and after an explicit Refresh.
+// ---------------------------------------------------------------------------
+
+func TestCore037_AsyncPluginInjectGateRefreshedAsync(t *testing.T) {
+	root := newRoot(t)
+	gateKey := cordis.NewServiceKey[string]("hardening.gate")
+	textKey := cordis.NewServiceKey[string]("hardening.text")
+	var runs atomic.Int64
+	plugin := &asyncPluginFunc{name: "async-waits", deps: []string{gateKey.Name()}, activate: func(_ context.Context, c cordis.Context, _ cordis.Value) error {
+		runs.Add(1)
+		_, err := cordis.Provide(c, textKey, "gated")
+		return err
+	}}
+	fiber, err := root.PluginAsync(plugin, nil)
+	if err != nil {
+		t.Fatalf("PluginAsync handle: %v", err)
+	}
+	// Missing inject: Pending, no apply, no service.
+	assertState(t, fiber, cordis.Pending)
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("async apply ran while Pending (runs = %d)", got)
+	}
+	if _, ok := cordis.Get(root, textKey); ok {
+		t.Fatal("service provided before the async plugin activated")
+	}
+
+	gate, err := cordis.Provide(root, gateKey, "ready")
+	if err != nil {
+		t.Fatalf("provide gate: %v", err)
+	}
+	// Synchronous refresh deliberately does not activate async fibers.
+	assertState(t, fiber, cordis.Pending)
+	root.Refresh()
+	assertState(t, fiber, cordis.Pending)
+	if _, ok := cordis.Get(root, textKey); ok {
+		t.Fatal("sync refresh activated an async plugin")
+	}
+
+	// Only refresh_async can advance an async fiber.
+	root.RefreshAsync(context.Background())
+	assertState(t, fiber, cordis.Active)
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("async apply runs = %d, want 1", got)
+	}
+	if got, ok := cordis.Get(root, textKey); !ok || got != "gated" {
+		t.Fatalf("service after refresh_async = %v/%v, want gated/true", got, ok)
+	}
+
+	// Removing the dependency does NOT unload the async fiber through the
+	// synchronous refresh: the Rust reference's sync refresh intentionally only
+	// handles sync plugins, so the dependent stays Active (stale) until the next
+	// refresh_async.
+	gate.Dispose()
+	assertState(t, fiber, cordis.Active)
+	root.RefreshAsync(context.Background())
+	assertState(t, fiber, cordis.Pending)
+	if _, ok := cordis.Get(root, textKey); ok {
+		t.Fatal("provider withdrawal left the dependent's service behind")
+	}
+}
+
+// TestCore037_AsyncPluginActivationFailure: a failure after the inject gate
+// opens marks the async fiber Failed and rolls its registrations back (the
+// async-activation counterpart of CORE-028/036).
+func TestCore037_AsyncPluginActivationFailure(t *testing.T) {
+	root := newRoot(t)
+	gateKey := cordis.NewServiceKey[string]("core037.gate")
+	textKey := cordis.NewServiceKey[string]("core037.text")
+	alreadyProvided, err := cordis.Provide(root, gateKey, "ready")
+	if err != nil {
+		t.Fatalf("provide gate: %v", err)
+	}
+	_ = alreadyProvided
+	plugin := &asyncPluginFunc{name: "async-gated-failure", deps: []string{gateKey.Name()}, activate: func(_ context.Context, c cordis.Context, _ cordis.Value) error {
+		if _, err := cordis.Provide(c, textKey, "stale"); err != nil {
+			return err
+		}
+		return cordis.PluginFailedError("async gated failure")
+	}}
+	fiber, err := root.PluginAsync(plugin, nil)
+	if err != nil {
+		t.Fatalf("PluginAsync handle: %v", err)
+	}
+	assertState(t, fiber, cordis.Failed)
+	if _, ok := cordis.Get(root, textKey); ok {
+		t.Fatal("failed async activation leaked a service")
+	}
+	if got := fiber.Error(); got == nil || !containsAll(got.Error(), "async gated failure") {
+		t.Fatalf("fiber.error() = %v, want a message containing the activation failure", got)
+	}
+}
+
+// TestCore037_AsyncPluginActivationCancelled: cancelling the context of an
+// async restart while ActivateAsync is suspended rolls the attempt back to
+// Pending instead of leaving the fiber Loading with live registrations.
+func TestCore037_AsyncPluginActivationCancelled(t *testing.T) {
+	root := newRoot(t)
+	textKey := cordis.NewServiceKey[string]("core037.cancel.text")
+	applyStarted := make(chan struct{}, 1)
+	var runs atomic.Int64
+	plugin := &asyncPluginFunc{name: "async-cancelled-activation", activate: func(ctx context.Context, c cordis.Context, _ cordis.Value) error {
+		runs.Add(1)
+		if _, err := cordis.Provide(c, textKey, "value"); err != nil {
+			return err
+		}
+		if runs.Load() != 2 {
+			return nil
+		}
+		// Only the second activation (the restart) suspends until its context is
+		// cancelled; the later refresh retry activates normally.
+		applyStarted <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	fiber, err := root.PluginAsync(plugin, nil)
+	if err != nil {
+		t.Fatalf("PluginAsync: %v", err)
+	}
+	assertState(t, fiber, cordis.Active)
+
+	restartCtx, cancel := context.WithCancel(context.Background())
+	restartDone := make(chan error, 1)
+	go func() { restartDone <- fiber.RestartAsync(restartCtx) }()
+	awaitSignal(t, "second async activation started", applyStarted)
+	cancel()
+	if err := awaitChan(t, "cancelled RestartAsync", restartDone); err != nil {
+		t.Fatalf("RestartAsync with cancelled activation = %v, want nil (cancellation contained)", err)
+	}
+	// The cancelled activation rolled back: Pending, no Loading leftovers, no
+	// live service from the abandoned attempt.
+	assertState(t, fiber, cordis.Pending)
+	if got := fiber.Effects(); len(got) != 0 {
+		t.Fatalf("cancelled activation left effects behind: %s", effectTree(got))
+	}
+	if _, ok := cordis.Get(root, textKey); ok {
+		t.Fatal("cancelled async activation leaked a service")
+	}
+	// A later refresh_async can retry (the rolled-back attempt did not wedge the
+	// lifecycle slot); the plugin re-applies and provides the service again.
+	root.RefreshAsync(context.Background())
+	assertState(t, fiber, cordis.Active)
+	if got := runs.Load(); got != 3 {
+		t.Fatalf("async apply runs = %d, want 3 (initial, cancelled retry, successful retry)", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // CORE-034: synchronous disposal goes through the embedder BlockingExecutor
 //
 // Process-global: SetBlockingExecutor is install-once. This test is declared
@@ -556,8 +721,14 @@ func (e *countingExecutor) BlockOn(ctx context.Context, fn func()) {
 }
 
 func TestCore034_SyncDisposalUsesBlockingExecutor(t *testing.T) {
+	if !inFreshProcess("TestCore034_SyncDisposalUsesBlockingExecutor") {
+		// The executor is process-global and install-once: use a clean process so
+		// the install and its routing count are observable regardless of -count.
+		runInFreshProcess(t, "TestCore034_SyncDisposalUsesBlockingExecutor")
+		return
+	}
 	if cordis.HasBlockingExecutor() {
-		t.Skip("KERNEL-TEST-ORDER: blocking executor already installed by an earlier test")
+		t.Fatal("fresh child process already has a blocking executor installed")
 	}
 	exec := &countingExecutor{}
 	if !cordis.SetBlockingExecutor(exec) {

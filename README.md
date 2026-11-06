@@ -157,7 +157,7 @@ cfg, err := cordis.Require(ctx, key)
 - **异步 = `context` + goroutine**：`AsyncPlugin.ActivateAsync(ctx, ...)`、`AsyncCleanup func(ctx) error`；取消 `ctx` 是 Rust「drop future」的 Go 等价物。A-9（取消卸载仍完成 teardown、异步清理 defer 到下次 dispose）已实现。
 - **自 join 检测**：Rust 用线程/任务本地 drain frame；Go 用 `context.Context` 携带 drain frame —— 清理函数调用自身 disposer 时，**必须把它收到的 ctx 传回去**才能触发 self-join 短路（传 `nil`/`context.Background()` 会等待）。
 - **生命周期重入判定**：Rust 用 operation token + 线程本地帧；Go 用 goroutine id 注册表（`runtime_goid.go`，唯一一处读取 runtime 栈的位置，只在生命周期入口的冷路径调用）。
-- **refresh 实现**：Go 版本用全量 fiber 扫描 + 有界固定点（≤64 轮），未移植上游的反向依赖索引（S1–S4）与 parked-cascade 恢复（A-9 已让取消卸载直接完成 teardown，因此没有 parked 帧）。
+- **refresh 实现**：依赖变化后的 dependents 刷新用简化版反向依赖索引（`inject 名 → fiber`）+ `dirtyServices` 快路径，只重算受影响的 fiber；显式 `Refresh/RefreshAsync` 仍是全量 fiber 扫描 + 有界固定点（≤64 轮）。上游的 parked-cascade 恢复（F1/F4/F5）未移植：A-9 取消语义让取消卸载直接完成 teardown，因此不会产生 parked 帧。
 - **supervision 常开**：上游是 cargo feature；Go 记账成本低，不做编译期开关。
 - **内核诊断日志**：上游用 `tracing`；Go 用标准库 `log/slog`（`slog.Default()`，宿主可替换 handler）。服务日志（`LoggerService`）仍是独立的 ring buffer + exporter 通道，默认无 exporter。
 
@@ -185,10 +185,13 @@ make ci      # check + build + test
 
 当前基线（本地实测）：
 
-- `go test ./...`：内核根包 + `conformance/lifecycle`、`conformance/services`、`conformance/runtime`、`internal/archtest` 全部通过
+- `go test ./...`：内核根包（55 个 smoke/edge 测试）+ `conformance/lifecycle`（67）、
+  `conformance/services`（36）、`conformance/runtime`（51）+ `internal/archtest`（2）全部通过
 - `go test -race ./...`：通过；并发/异步/生命周期用例 `-count=5..20` 稳定
-- `go vet ./...`、`gofmt -l` 干净
-- 一致性测试逐条对应 `conformance/` 下的 `TestCoreNNN_*`（CORE-001…051 的 Go 映射见 [`docs/GO-DESIGN.md`](docs/GO-DESIGN.md)）
+- 合并覆盖率 **80.7%**（`go test -coverpkg=github.com/zeokeel/cordis-go -coverprofile ... . ./conformance/...`）
+- `go vet ./...`、`gofmt -l` 干净；`scripts/ci.sh`（gofmt/vet/build/test/race）全绿
+- 一致性测试逐条对应 `conformance/` 下的 `TestCoreNNN_*`：**CORE-001…051 全覆盖**
+  （映射表见 [`docs/GO-DESIGN.md`](docs/GO-DESIGN.md) §10）
 
 ---
 

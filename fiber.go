@@ -1010,6 +1010,9 @@ func drainBatch(asyncMode bool, ctx context.Context, effects []*fiberEffect, def
 // dependents first. It returns the first captured cleanup panic (the caller
 // decides whether to re-raise it) and whether the teardown was cancelled.
 func (d *fiberData) unload(target FiberState, asyncMode bool, ctx context.Context) (firstPanic any, err error) {
+	d.mu.Lock()
+	registry := d.registry
+	d.mu.Unlock()
 	batch := d.beginUnload()
 	if batch == nil {
 		return nil, nil
@@ -1017,8 +1020,8 @@ func (d *fiberData) unload(target FiberState, asyncMode bool, ctx context.Contex
 	// The withdrawal invalidates the dependency edges: mark the names dirty so
 	// the indexed dependents refresh retries busy/skipped dependents later.
 	for _, name := range batch.withdrew {
-		if d.registry != nil {
-			d.registry.noteServiceChanged(name)
+		if registry != nil {
+			registry.noteServiceChanged(name)
 		}
 	}
 	// Two-phase cascade: begin the provider, begin every transitively-unready
@@ -1056,8 +1059,10 @@ func (d *fiberData) unload(target FiberState, asyncMode bool, ctx context.Contex
 		d.mu.Unlock()
 	}
 	d.finishUnload(batch, target)
-	if d.registry != nil {
-		d.registry.RefreshDependents()
+	// Retry dependents skipped because their lifecycle slot was busy; the dirty
+	// service names were recorded above.
+	if registry != nil {
+		registry.RefreshDependents()
 	}
 	return firstPanic, err
 }
