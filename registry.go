@@ -14,7 +14,7 @@ import (
 // PluginKey is the registry identity of a plugin.
 //
 // A plugin is identified by its name (NamedPluginKey, the default) or by its
-// concrete Go type (TypedPluginKey[T], the counterpart of the Rust
+// concrete Go type (TypedPluginKey[T], the counterpart of the Cordis
 // PluginKey::Type TypeId). Fibers of the same runtime share one PluginRuntime
 // and are deduplicated: loading the same plugin again returns the existing
 // runtime.
@@ -34,9 +34,8 @@ const (
 // NamedPluginKey builds a name-based plugin identity.
 func NamedPluginKey(name string) PluginKey { return PluginKey{kind: pluginKeyNamed, name: name} }
 
-// TypedPluginKey builds a type-based plugin identity (the Go counterpart of
-// Rust's PluginKey::Type). Because it is a package-level generic function it can
-// be used where the Rust reference uses `plugin_typed`/`plugin_async_typed`.
+// TypedPluginKey builds a type-based plugin identity. Because it is a
+// package-level generic function it can be used wherever a typed key is needed.
 func TypedPluginKey[T any]() PluginKey {
 	return PluginKey{kind: pluginKeyTyped, typ: reflect.TypeFor[T]()}
 }
@@ -252,8 +251,7 @@ type Registry struct {
 	mu       sync.Mutex
 	runtimes map[PluginKey]*PluginRuntime
 	// root is a weak handle: a disposed root fiber must be collectable without
-	// the registry pinning it (CORE-033; the Rust reference uses weak self-links
-	// for the same reason).
+	// the registry pinning it (CORE-033).
 	root weak.Pointer[fiberData]
 
 	fibersMu sync.Mutex
@@ -283,13 +281,13 @@ type Registry struct {
 
 	// Reverse dependency index (inject name → fiber ids): keeps the unload
 	// cascade proportional to the affected dependents instead of rescanning
-	// every fiber (the Rust reference's S1–S4 index, simplified).
+	// every fiber (the Cordis S1–S4 index, simplified).
 	depMu     sync.Mutex
 	depIndex  map[string]map[uint64]struct{}
 	fiberDeps map[uint64][]string
 	byID      map[uint64]*fiberData
 	// dirtyServices are service names whose availability/version changed since
-	// the last indexed dependents refresh (the Rust S4 fast path).
+	// the last indexed dependents refresh (the Cordis S4 fast path).
 	dirtyServices map[string]struct{}
 }
 
@@ -689,7 +687,7 @@ func fmtCache(format string, args ...any) string { return fmt.Sprintf(format, ar
 // returning the (now-detached) runtime. It returns nil when the key is absent.
 //
 // Cleanup panics are contained per fiber so one broken fiber cannot stop the
-// removal (the Rust reference disposes all fibers, then returns the runtime).
+// removal (Cordis semantics disposes all fibers, then returns the runtime).
 func (r *Registry) Delete(key PluginKey) *PluginRuntime {
 	r.mu.Lock()
 	runtime, ok := r.runtimes[key]
@@ -796,7 +794,7 @@ func (r *Registry) notifyIdle() {
 
 // WhenIdle blocks until the tree is quiescent.
 //
-// It is recovery-aware in the Rust reference; the Go port completes teardown
+// It is recovery-aware in Cordis semantics; the Go implementation completes teardown
 // inline instead of parking frames, so waiting for idle is sufficient.
 func (r *Registry) WhenIdle() {
 	_ = r.WhenIdleContext(context.Background())
@@ -930,7 +928,7 @@ func (r *Registry) refreshPass(asyncMode bool) bool {
 			continue
 		}
 		// A synchronous refresh only handles sync plugins: async activation and
-		// async unload require an await point (Rust: use RefreshAsync).
+		// async unload require an await point (use RefreshAsync).
 		if !asyncMode && data.isAsyncPlugin() {
 			continue
 		}

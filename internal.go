@@ -95,7 +95,6 @@ type LifecycleEvent struct {
 type LifecycleListener func(*LifecycleEvent)
 
 // Hook types for the typed internal/* surface. See the package documentation of
-// the Rust reference's internal.rs for the event-to-hook mapping.
 type (
 	// PluginHook observes fiber creation (internal/plugin).
 	PluginHook func(f *Fiber)

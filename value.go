@@ -10,9 +10,8 @@ import "time"
 // kernel treats them as opaque data and never inspects them outside the config
 // schema validator.
 //
-// The Rust reference uses serde_json::Value; the alias keeps the same spelling
-// in documentation and examples without forcing a concrete representation on
-// embedders.
+// The alias keeps the JSON-ish spelling used in Cordis documentation and
+// examples without forcing a concrete representation on embedders.
 type Value = any
 
 // Clock is the injectable time source of a context tree.

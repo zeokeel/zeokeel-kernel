@@ -1,10 +1,8 @@
 # Go 层设计：zeokeel-kernel v0
 
 > **定位**：三件套第三篇，说明 Go 实现的包布局、公共 API、并发/锁层级、生命周期与异步语义、
-> 与 Rust 的差异、已知简化、测试策略与 CORE→测试映射。与官方 TS Cordis 4.1.0 的**特性级对照**与
-> 「通用内核」路线见 [CORDIS-COMPARISON.md](CORDIS-COMPARISON.md)；可行性论证见
-> [GO-FEASIBILITY.md](GO-FEASIBILITY.md)，Rust 架构见 [ARCHITECTURE-ANALYSIS.md](ARCHITECTURE-ANALYSIS.md)，
-> 逐用例断言见 [05-core-cases](analysis/05-core-cases.md)。
+> 与 Cordis 的差异、已知简化、测试策略与 CORE→测试映射。与官方 TS Cordis 4.1.0 的**特性级对照**与
+> 设计目标、可观察契约与 CORE→测试映射；运行时语义以 Cordis CORE-001…051 为准。
 >
 > **状态快照（2026-11-06 14:30，工作区最终状态 / Go 1.27.3）**：内核主体、`conformance/`（154 个测试，
 > 覆盖 51/51 CORE）、根包 smoke/edge/API 测试（56 个）、`internal/archtest`（2 个）、`examples/`（4 个）、
@@ -17,7 +15,7 @@
 
 [0 现状](#0-现状已实现--简化--未实现) · [1 目标](#1-设计目标与约束) · [2 布局](#2-包与文件布局) ·
 [3 API](#3-公共-api-清单与命名约定) · [4 并发](#4-并发模型与锁层级) · [5 生命周期](#5-生命周期实现) ·
-[6 异步](#6-异步与取消) · [7 差异](#7-与-rust-的差异清单) · [8 路线图](#8-已知简化与路线图) ·
+[6 异步](#6-异步与取消) · [7 差异](#7-与-cordis-的差异清单) · [8 路线图](#8-已知简化与路线图) ·
 [9 测试](#9-测试策略) · [10 CORE 映射](#10-core-用例--go-测试映射) · [11 结论](#11-结论)
 
 ---
@@ -71,7 +69,7 @@
 | `EffectFuture` | 只接收已求值 cleanup | 无 async future body |
 | supervision | 始终开启，无 build tag | 默认 API 面更大 |
 | 日志 | `log/slog` + `SlogExporter` | 无 tracing span |
-| Miri | 无 | CORE-051 断言改写 |
+| 内存/断言检查 | 无 | CORE-051 断言改写 |
 
 ### 0.3 未实现 / 待补
 
@@ -83,14 +81,14 @@ property/redteam/api_surface/blocking 专项、benchmark；`EffectFuture` 的 bo
 
 ## 1. 设计目标与约束
 
-1. **可观察契约优先**：状态、顺序、错误变体、计数、清理次数与 Rust 对齐；不追求实现结构等价。
+1. **可观察契约优先**：状态、顺序、错误变体、计数、清理次数与 Cordis 对齐；不追求实现结构等价。
 2. **标准库 only**：`go.mod` 无第三方依赖；`weak`（1.24+）、`log/slog`、`reflect`、`context` 可用。
 3. **无 unsafe/cgo**：内核不 import `unsafe`、不做 `//go:linkname`；`internal/archtest` 已强制 import 边界 + 420 导出 API cap。
 4. **API 亲和 Go**：用 **Go 1.27 泛型方法** 提供 typed 服务读写（`ctx.Get[T](key)`，类型参数
    自动推断；接口方法仍不能带类型参数，故 `Plugin`/`AsyncPlugin` 等接口保持非泛型，用
    `PluginTyped`/`PluginAsyncTyped` 泛型方法提供类型身份）、`error` 哨兵 + `errors.Is`、
    `context.Context` 作为取消/超时载体、显式 `Dispose` 作为生命周期终点。
-5. **锁内不跑用户代码**：这是与 Rust 相同的硬约束；Go 的 Mutex 不可重入且无锁中毒，违反即自死锁。
+5. **锁内不跑用户代码**：这是与 Cordis 相同的硬约束；Go 的 Mutex 不可重入且无锁中毒，违反即自死锁。
 6. **如实标注简化**：不在文档/注释中承诺未实现的能力（尤其 Drop 语义、反向索引、parked 恢复）。
 
 ---
@@ -222,7 +220,7 @@ func Get[T any](c Context, key ServiceKey[T]) (T, bool)
 `defer guard.End()`）。
 
 **快照语义**：每个方法只锁一个结构，跨调用可短暂不一致；需要一致视图用 `IsIdle/WhenIdle`。
-`Delete` 只删除空 runtime（与 Rust 不同）；`Keys` 排序保证确定性。
+`Delete` 只删除空 runtime（与 Cordis 不同）；`Keys` 排序保证确定性。
 
 ### 3.6 Events / Waterfall / Internal API
 
@@ -256,7 +254,7 @@ type PluginConfigSchema interface{ ConfigSchema() ConfigSchema } // 可选：sch
 
 ### 3.8 错误模型
 
-`ErrCode`（17 个，与 Rust 变体一一对应）：
+`ErrCode`（17 个，与 Cordis 语义一一对应）：
 
 `CodeInactiveEffect`、`CodeDuplicateService`、`CodeUnknownService`、`CodeInvalidPlugin`、
 `CodePluginFailed`、`CodeDisposed`、`CodeValidation`、`CodeServiceWriteForbidden`、
@@ -267,7 +265,7 @@ type PluginConfigSchema interface{ ConfigSchema() ConfigSchema } // 可选：sch
 `CordisError` 携带 code + name/detail/kind/validation/cause；`Is` 按 code 匹配，因此
 `errors.Is(err, ErrLifecycleBusy)` / `errors.Is(err, ErrDuplicateService)` 可匹配任意同类错误；
 `CodeOf/IsCode` 用于分支；`PluginError(plugin,kind,message)` 是结构化插件错误，内核**原样传播**
-（不 `%w` 包装），`ErrorDetail()` 读取。`ValidationError` 的 `Error()` 文本对齐 Rust
+（不 `%w` 包装），`ErrorDetail()` 读取。`ValidationError` 的 `Error()` 文本对齐 Cordis
 （`invalid config:\n  - issue`）。
 
 ### 3.9 日志/配置/时钟/L2
@@ -330,7 +328,7 @@ type PluginConfigSchema interface{ ConfigSchema() ConfigSchema } // 可选：sch
   直接复用；否则 CAS 式认领；已被占用则 `ErrLifecycleBusy`。
 - `withLifecycle` 安装 token + `beginOperation` + `defer` 释放；`unloadForRefresh` 也安装 token（v0.6
   语义：refresh 卸载占槽）。
-- **限制**：async 操作若在另一个 goroutine 恢复，token 栈不可见 → Busy；这是 Go 侧与 Rust 的主要差异
+- **限制**：async 操作若在另一个 goroutine 恢复，token 栈不可见 → Busy；这是 Go 侧与 Cordis 的主要差异
   （CORE-045）。文档需建议：不要在 cleanup 之外依赖“同线程重入”。
 
 ### 4.4 竞态契约
@@ -346,10 +344,10 @@ type PluginConfigSchema interface{ ConfigSchema() ConfigSchema } // 可选：sch
 
 ### 5.1 状态机映射
 
-v0 与 Rust 同为六态（`Pending/Loading/Active/Failed/Unloading/Disposed`），`Disposed` 终态、
+v0 与 Cordis 同为六态（`Pending/Loading/Active/Failed/Unloading/Disposed`），`Disposed` 终态、
 `Failed` 稳定；root 为 `Active`（id=0）。`transition` 拒绝同态与从 Disposed 迁出；`statusSeq`
-从 0 递增；`transitionIfEpoch` 用于 XT-02。迁移图与 Rust 一致，见
-[ARCHITECTURE-ANALYSIS §4.2](ARCHITECTURE-ANALYSIS.md#42-六态状态机)。
+从 0 递增；`transitionIfEpoch` 用于 XT-02。迁移图与 Cordis 一致，见
+Cordis 六态状态机。
 
 ### 5.2 激活（`createFiber` + `activateSync/Async`）
 
@@ -379,14 +377,14 @@ Refresh。`activateAsync` 同构；ctx 取消时丢弃本 epoch 并回 Pending�
 
 **顺序**：withdraw 在 drain 前（CORE-042）；dependents 在 provider cleanup 前；child 在 parent 前
 （ownership effect 逆序 + child sweep 兜底）。**差异**：注入依赖级联是两阶段迭代；ownership 子树仍通过
-effect cleanup 递归 `child.Dispose()`，深父子链依赖 Go 栈增长；非根帧不 claim lifecycle slot（与 Rust
+effect cleanup 递归 `child.Dispose()`，深父子链依赖 Go 栈增长；非根帧不 claim lifecycle slot（与 Cordis
 相同残余窗口）。
 
 ### 5.4 refresh
 
 `Refresh`：`refreshMu.TryLock`（失败置 dirty 返回）→ 最多 64 轮：`refreshDirty=false`，`refreshPass`
 遍历快照；Active 且 !satisfied→`unloadForRefresh(Pending)`（claim lifecycle，busy 跳过）；Pending 且
-ready→activate；有 changed 或 dirty 则继续。`RefreshAsync` 用 `refreshPassAsync`。sync `refreshPass` 对 `isAsyncPlugin()` **直接跳过**（Rust 语义）；
+ready→activate；有 changed 或 dirty 则继续。`RefreshAsync` 用 `refreshPassAsync`。sync `refreshPass` 对 `isAsyncPlugin()` **直接跳过**（Cordis 语义）；
 async 插件的激活/卸载只由 `RefreshAsync` 推进。
 
 ### 5.5 busy/reentrancy
@@ -426,7 +424,7 @@ async 插件的激活/卸载只由 `RefreshAsync` 推进。
   `WhenIdleContext` 用 `isIdleExcluding(registrationCountFor(goid))` 排除当前 goroutine 的注册；外部
   waiter 完整等待（CORE-049 的 C4）。
 - `WhenIdle` 等待 idleCh（close/recreate 广播）；ctx 取消返回 ctx.Err()。
-- **未实现** recovery-aware 循环（无 parked 帧）；两线程互相等待注册窗口仍可死锁（与 Rust 相同）。
+- **未实现** recovery-aware 循环（无 parked 帧）；两线程互相等待注册窗口仍可死锁（与 Cordis 相同）。
 
 ---
 
@@ -449,7 +447,7 @@ DisposeBlocking(ctx): self-join/settled 短路，否则 DisposeAsync(ctx)
 ```
 
 **语义**：单次、逆序、顺序执行不并发、join 不重复、未启动恢复（S-1）、in-flight cleanup 不可恢复
-（与 Rust A-9 边界一致）、self-join 需要把 cleanup 收到的 ctx 传回。`IsDisposed` = settled && 列表空 &&
+（与 Cordis A-9 边界一致）、self-join 需要把 cleanup 收到的 ctx 传回。`IsDisposed` = settled && 列表空 &&
 !cancelled。`discard` 用于父摘除已 dispose 的 child ownership effect。
 
 ### 6.2 deferred / parked / orphan
@@ -457,7 +455,7 @@ DisposeBlocking(ctx): self-join/settled 短路，否则 DisposeAsync(ctx)
 - **deferred**：`drainEffectsAsync` 在 ctx 取消时把未启动 async 放回 `fiberData.deferredAsync`，下次
   `Dispose/DisposeAsync` 先排干（`beginUnload` 的 retry 分支）。
 - **parked**：v0 **没有** Registry 级 parked 帧；每个 fiber 的取消卸载都自行落到目标态。因此没有
-  `when_idle` recovery 循环，也没有 `recover_parked_unloads` 公开 API。这是与 Rust 的有意差异
+  `when_idle` recovery 循环，也没有 `recover_parked_unloads` 公开 API。这是与 Cordis 的有意差异
   （CORE-046 的 F1/F4/F5 不适用），代价是取消路径仍可能执行清理/阻塞，且不能“稍后由另一个入口恢复”。
 - **orphan**：仅 `Abandon` 在无 `BlockingExecutor` 时把 async effect 放进有界队列（cap 256）；
   `OrphanAsyncCleanupsPending/OrphanAsyncCleanupCount/OrphanAsyncCleanupFailureCount` 可观测，
@@ -484,35 +482,21 @@ Go 没有 reactor 线程 park 死锁的同一问题，因此默认 inline 是合
 
 ---
 
-## 7. 与 Rust 的差异清单
+## 7. 实现取舍
 
-| # | 主题 | Rust | Go v0 | 级别 |
-|---|---|---|---|---|
-| 1 | 资源释放 | `Drop` 最后句柄自动清理 | 显式 `Dispose/DisposeAll`；`Abandon` 兜底 | L2 |
-| 2 | 丢 fiber 句柄 | `FiberData::drop` 安全网 | 无动作（GC 回收内存，不跑清理） | L2 |
-| 3 | 弱引用存活 | `Weak::upgrade` → None 作为 fail-open | `weak.Pointer` + 显式 `State()`；不依赖 upgrade 时机 | L1/L2 |
-| 4 | future drop 取消 | 隐式 drop 点 + CancelSafe 收尾 | `ctx.Done()`；未启动 restore、in-flight 丢失；无 parked | L2 |
-| 5 | BlockingExecutor | 同步 dispose 默认 thread-park block_on；CORE-034 必走 executor | 默认 inline；安装后同步卸载走 executor（CORE-034 已覆盖）；无 block_on | L1 |
-| 6 | supervision | `#[cfg(feature)]`，默认关闭 | 始终开启，无 build tag | L1 |
-| 7 | 反向依赖索引 | `DepIndex` + dirty 快路径 | cascade 与 dependents 刷新用 `depIndex`+`dirtyServices`；显式 Refresh 全量 | L2（性能，已缓解） |
-| 8 | 迭代级联 | 显式 DFS 栈，O(1) 调用栈 | dependent 两阶段迭代；ownership 子树递归 | L1（结构） |
-| 9 | FiberSlots | tombstone + positions，O(1) 删除 | slice 线性删除 | L1（性能） |
-| 10 | 双 lane | sized/any + `ArcWrap` TypeId | `any` 合并；无 lane 标记 | L2 |
-| 11 | TypeId/泛型 | 泛型方法 + TypeId | Go 1.27 泛型方法 + reflect.Type；接口方法不能带类型参数（用可选接口/泛型方法桥接） | L1 |
-| 12 | 生命周期 token | thread/task-local + op token | goid token 栈；async 迁移 goroutine 丢失重入 | L2 |
-| 13 | activation epoch | 嵌套 frame 栈 + 每 poll 安装 | fiber `activatingEpoch` 字段（近似） | L1/L2 |
-| 14 | `when_idle` | recovery-aware；ThreadId 排除自身注册 | 无 recovery；goid 排除自身注册 | L2 |
-| 15 | `Delete` | 删除 runtime 并 dispose fibers | 已对齐：删除 runtime 并逐个 dispose fiber | L0 |
-| 16 | `UID/AssertActive` | Disposed 后 uid=None；InactiveEffect | 已对齐：UID 返回 false；AssertActive 返回 ErrInactiveEffect | L0 |
-| 17 | `set_revertible` | 公开返回 Disposer | 已对齐：`SetRevertibleNamed` 返回 inverse Disposer | L0 |
-| 18 | 日志 | `tracing` | `log/slog` + `SlogExporter` | L1 |
-| 19 | panic=abort 守卫/Miri | 编译期 + Miri | 无；`-race`/架构测试替代 | L3 |
-| 20 | 深度限制 | 256（fiber parent chain） | 相同（`MaxPluginDepth=256`） | L0 |
-| 21 | 事件 async options | async lane 只有 prepend | `OnAsyncWith(prepend,global)` 也支持 global | L1 |
-| 22 | `Entries` | `Vec<(key,runtime)>` | `map[PluginKey]*PluginRuntime` | L1 |
-| 23 | sync Refresh 与 async | `refresh()` 跳过所有 async fiber | 已对齐：`refreshPass` 对 async plugin 直接跳过 | L0 |
+下列差异来自 Go 语言机制的有意取舍，不是语义退让：
 
----
+| 主题 | Go v0 实现 | 影响 |
+| --- | --- | --- |
+| 资源释放 | GC + 显式 `Dispose/DisposeAll`；`Abandon` 兜底 | 不依赖析构器，确定性清理由调用方驱动 |
+| 弱引用存活 | `weak.Pointer` + 显式状态判断 | 需要显式 `Dispose`，不依赖 weak upgrade 时机 |
+| 异步取消 | `context.Context` + 协作取消 | 取消映射为 context 取消，in-flight teardown 由 kernel 收尾 |
+| 生命周期互斥 | goid token + operation token | 异步迁移 goroutine 时需传回 ctx |
+| 反向依赖索引 | `depIndex` + `dirtyServices`；显式 Refresh 全量 | 大规模依赖下显式 Refresh 成本较高 |
+| 双 lane / 类型标记 | `any` 合并 + Go 泛型/`reflect.Type` | 类型信息由泛型与 ServiceKey 表达 |
+| 日志 | `log/slog` + `SlogExporter` | 不内置 tracing span |
+| panic/内存检查 | `recover` 边界 + `-race`/架构测试 | 无编译期内存检查工具 |
+| 深度限制 | `MaxPluginDepth=256` | 与 CORDIS 语义一致 |
 
 ## 8. 已知简化与路线图
 
@@ -590,7 +574,7 @@ conformance/services/    context_test(003/025/040)  registry_test(022/048)
 
 > 现状列：`conf` = `conformance/` 已覆盖；`部分` = 覆盖主路径但边界/语义有差异；`—` = 待补。
 > 实际测试名为 `TestCoreNNN_<短名>`；文件路径省略 `conformance/` 前缀与 `_test.go` 后缀。
-> CORE 断言细节以 [05](analysis/05-core-cases.md) 为准。
+> CORE 断言细节以 `conformance/` 测试为准。
 
 | CORE | 断言焦点 | conformance 位置 | 现状 |
 |---|---|---|---|
@@ -647,18 +631,18 @@ conformance/services/    context_test(003/025/040)  registry_test(022/048)
 | 051 | dispose_all | lifecycle/fiber | conf |
 
 > 说明：`conformance/` 实际 154 个测试，覆盖 51/51 CORE；根包另有 55 个 smoke/edge 测试。
-> CORE-033 的 Rust 断言是“无强环”，Go 用 GC/finalizer 探针改写；CORE-046/049 的 parked/recovery
+> CORE-033 的 Cordis 断言是“无强环”，Go 用 GC/finalizer 探针改写；CORE-046/049 的 parked/recovery
 > 部分在 Go 中 N/A（见 §6.2）。测试断言以仓库当前版本为准。
 ---
 
 ## 11. 结论
 
-v0 用约 8.1k 行 Go + 7.5k 行 conformance 实现了 Rust 内核的全部**组合原语**与大多数可观察语义；
-主要简化集中在**确定性析构、Weak 存活、thread-local 执行帧、future drop 取消、TypeId/类型系统**五处
+v0 用约 8.1k 行 Go + 7.5k 行 conformance 实现了 Cordis 内核的全部**组合原语**与大多数可观察语义；
+主要简化集中在**确定性析构、弱引用存活、执行帧传递、异步取消、类型系统**五处
 （Go 1.27 泛型方法已消除 typed API 形态差异，仅剩接口方法限制与 lane 合并），
 以及**refresh 索引快路径/parked recovery/FiberSlots** 三项性能/边界设施；均有显式替代或 N/A 标注。
 下一步优先补剩余专项测试（property/redteam/blocking/bench）与显式 Refresh 候选过滤，再按需引入
 P1 refresh 索引/ownership 显式栈；保持“代码现状 ↔ 文档承诺 ↔ 测试断言”三者一致。
 
-→ 语言机制与风险见 [GO-FEASIBILITY.md](GO-FEASIBILITY.md)；
-→ Rust 语义与证据见 [ARCHITECTURE-ANALYSIS.md](ARCHITECTURE-ANALYSIS.md)。
+→ 语言机制与取舍见本文件「已知简化与路线图」章节；
+→ 可观察语义以 `conformance/` 测试与 Cordis CORE-001…051 为准。

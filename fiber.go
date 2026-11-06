@@ -108,9 +108,8 @@ func (e *fiberEffect) disposeContained() (panicValue any) {
 }
 
 // fiberData is the shared core of a fiber. A Fiber handle is a thin pointer
-// wrapper; like the Rust `Arc<Mutex<FiberData>>`, the data lives as long as any
-// handle, its context, or the registry references it (Go GC does the lifetime
-// management).
+// wrapper; the data lives as long as any handle, its context, or the registry
+// references it (Go GC does the lifetime management).
 type fiberData struct {
 	mu     sync.Mutex
 	id     uint64
@@ -959,7 +958,7 @@ type cascadeFrame struct {
 // beginCascade begins the unload of every active fiber whose injected services
 // became unavailable, transitively, in provider-before-dependent order. The
 // caller drains the returned frames in reverse begin order (dependents before
-// providers), matching the Rust two-phase cascade (CORE-042/CORE-047) while
+// providers), matching the Cordis two-phase cascade (CORE-042/CORE-047) while
 // keeping the walk iterative and proportional to the affected dependents via the
 // reverse dependency index.
 func (d *fiberData) beginCascade(frontier []string) []cascadeFrame {
@@ -1424,10 +1423,9 @@ func (f *Fiber) ID() uint64 {
 	return 0
 }
 
-// UID returns the registry uid assigned at creation (same as ID in the Go port).
+// UID returns the registry uid assigned at creation (same as ID in the Go implementation).
 //
-// A disposed fiber reports no uid, matching the Rust reference's
-// `Fiber::uid() -> Option<u64>` after disposal (CORE-026).
+// A disposed fiber reports no uid (CORE-026).
 func (f *Fiber) UID() (uint64, bool) {
 	d := f.fiberData()
 	if d == nil {
@@ -1688,7 +1686,7 @@ func (f *Fiber) DisposeAsync(ctx context.Context) error {
 	})
 }
 
-// Abandon is the explicit Go analogue of dropping the last Rust Fiber handle
+// Abandon is the explicit Go analogue of dropping the last Cordis Fiber handle
 // without disposing: it runs sync cleanups, and either runs async cleanups
 // through an installed BlockingExecutor or hands them to the orphan queue
 // (observable through OrphanAsyncCleanupsPending and recoverable with

@@ -4,8 +4,8 @@ import (
 	"errors"
 )
 
-// ErrCode classifies a CordisError. The set mirrors the variants of the Rust
-// reference's CordisError enum; errors.Is works on the code, so callers can
+// ErrCode classifies a CordisError. The set mirrors the CordisError variants;
+// errors.Is works on the code, so callers can
 // match either a sentinel (ErrLifecycleBusy) or a concrete error returned by an
 // operation (errors.Is(err, ErrDuplicateService)).
 type ErrCode uint8
@@ -116,7 +116,7 @@ type CordisError struct {
 	cause error
 }
 
-// Error implements the error interface using the Rust reference's wording, so
+// Error implements the error interface using Cordis wording, so
 // cross-language conformance tests can match messages where they are part of
 // the observable contract.
 func (e *CordisError) Error() string {

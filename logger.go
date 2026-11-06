@@ -7,7 +7,7 @@ import (
 )
 
 // Severity of a log record, ordered from most to least severe. The numeric
-// order is the threshold order used by the Rust reference: a record is emitted
+// order is the threshold order used by Cordis semantics: a record is emitted
 // when its level is at or below the active threshold.
 type LogLevel uint8
 
@@ -338,9 +338,8 @@ func (l *Logger) Debug(message string, fields Value) { l.Log(LogDebug, message, 
 
 // SlogExporter forwards records to log/slog.
 //
-// It is the Go counterpart of the Rust reference's TracingExporter: it keeps the
-// host's existing logging pipeline working while plugins log through the
-// Cordis structured API. Use the zero value to target slog.Default(), or set
+// It keeps the host's existing logging pipeline working while plugins log
+// through the Cordis structured API. Use the zero value to target slog.Default(), or set
 // Logger to route to a specific handler.
 type SlogExporter struct {
 	// Logger is the target slog logger; nil means slog.Default().

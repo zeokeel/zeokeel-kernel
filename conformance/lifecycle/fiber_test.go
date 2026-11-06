@@ -16,9 +16,6 @@ import (
 
 // ---------------------------------------------------------------------------
 // CORE-001: activation / unload / cleanup flow, is_active tracking
-// (lifecycle.rs::effects_run_in_reverse_order_once,
-//  ::event_bail_and_owner_disposal,
-//  api_surface.rs::api_fiber_is_active_tracks_lifecycle_states)
 // ---------------------------------------------------------------------------
 
 func TestCore001_EffectsRunReverseOrderOnce(t *testing.T) {
@@ -128,10 +125,6 @@ func TestCore001_IsActiveTracksLifecycleStates(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-026: fiber diagnostics (uid/parent/assert_active/await_settled/settled)
-// (fiber.rs::fiber_uid_parent_and_assert_active,
-//  ::await_settled_rethrows_startup_errors,
-//  ::await_settled_waits_for_async_effect_cleanup,
-//  regression_core.rs::awaiting_settled_observes_refresh_unload)
 // ---------------------------------------------------------------------------
 
 func TestCore026_UIDParentAssertActive(t *testing.T) {
@@ -264,7 +257,6 @@ func TestCore026_AwaitSettledWaitsForAsyncEffectCleanup(t *testing.T) {
 }
 
 // TestCore026_AwaitSettledObservesRefreshUnload covers
-// regression_core.rs::awaiting_settled_observes_refresh_unload: a refresh-driven
 // unload is in-flight work, so awaiting settlement converges with the fiber no
 // longer Active (here: back to Pending).
 func TestCore026_AwaitSettledObservesRefreshUnload(t *testing.T) {
@@ -295,15 +287,11 @@ func TestCore026_AwaitSettledObservesRefreshUnload(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-027: async effect bodies/streams and restart teardown
-// (async_effect_body.rs::async_effect_body_and_stream,
-//  ::restart_awaits_async_effect_cleanups, ::async_effect_body_nests_labeled_effects;
-//  async_conformance.rs::restart_async_drains_and_reapplies_async_effects;
-//  lifecycle.rs::restart_reapplies_plugin_and_update_config)
 //
 // Go mapping note: ctx.EffectFuture takes the already-computed AsyncEffect and
-// EffectStream feeds a channel; the async "body" of the Rust effect_future is a
-// synchronous closure in Go, so the async-body *error* case is covered by
-// CORE-036 (AsyncPlugin failure rollback).
+// EffectStream feeds a channel; in Go the async body is a synchronous closure,
+// so the async-body error case is covered by CORE-036 (AsyncPlugin failure
+// rollback).
 // ---------------------------------------------------------------------------
 
 func TestCore027_AsyncEffectBodyAndStream(t *testing.T) {
@@ -427,10 +415,6 @@ func TestCore027_AsyncBodyNestsLabeledEffects(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-028: failed activation rolls back effects/services and keeps the
-// structured error (hardening.rs::failed_apply_rolls_back_effects_and_services,
-// api_surface.rs::api_structured_plugin_error_constructor_and_display,
-// ::api_structured_plugin_error_survives_sync_activation,
-// regression_core.rs::xt02_activation_dependency_lost_rolls_back_to_pending)
 // ---------------------------------------------------------------------------
 
 func TestCore028_FailedApplyRollsBackEffectsAndServices(t *testing.T) {
@@ -576,7 +560,6 @@ func TestCore028_ActivationDependencyLostRollsBackToPending(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-029: apply panic is isolated, the fiber fails and rolls back, the caller
-// does not panic (hardening.rs::panicking_apply_is_isolated_and_rolled_back)
 // ---------------------------------------------------------------------------
 
 func TestCore029_PanickingApplyIsolatedAndRolledBack(t *testing.T) {
@@ -622,8 +605,6 @@ func TestCore029_PanickingApplyIsolatedAndRolledBack(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-035: AsyncPlugin activates/disposes through the *_async APIs
-// (hardening.rs::async_plugin_activates_and_disposes,
-//  api_surface.rs::api_structured_plugin_error_survives_async_activation)
 // ---------------------------------------------------------------------------
 
 func TestCore035_AsyncPluginActivatesAndDisposes(t *testing.T) {
@@ -681,7 +662,6 @@ func TestCore035_AsyncPluginStructuredError(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-036: async plugin failure rolls back and awaits async cleanup
-// (hardening.rs::async_plugin_failure_rolls_back)
 // ---------------------------------------------------------------------------
 
 func TestCore036_AsyncPluginFailureRollsBack(t *testing.T) {
@@ -728,7 +708,6 @@ func TestCore036_AsyncPluginFailureRollsBack(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-038: a failed sync activation drains async cleanup inline (cross-lane
 // reverse order), and a later dispose does not repeat it
-// (hardening.rs::failed_sync_activation_drains_async_cleanup_inline)
 // ---------------------------------------------------------------------------
 
 func TestCore038_FailedSyncActivationDrainsAsyncCleanupInline(t *testing.T) {
@@ -759,7 +738,6 @@ func TestCore038_FailedSyncActivationDrainsAsyncCleanupInline(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-039: restart rechecks the inject gate instead of force-activating
-// (hardening.rs::restart_rechecks_inject_gate)
 // ---------------------------------------------------------------------------
 
 func TestCore039_RestartRechecksInjectGate(t *testing.T) {
@@ -800,9 +778,6 @@ func TestCore039_RestartRechecksInjectGate(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-044: a disposed fiber is terminal; lifecycle broadcasts report every
 // transition, contain listener panics and support unsubscribe
-// (redteam.rs::rt12_restart_after_dispose_fails_safely,
-//  redteam.rs::rt01_sync_dispose_during_apply_must_not_end_active,
-//  api_surface.rs::api_on_lifecycle_*)
 // ---------------------------------------------------------------------------
 
 func TestCore044_DisposedFiberIsTerminal(t *testing.T) {
@@ -1024,10 +999,6 @@ func TestCore044_LifecycleBroadcast(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-045: concurrent lifecycle calls are exclusive (LifecycleBusy), while a
 // reentrant call from the running operation is allowed
-// (concurrency.rs::concurrent_dispose_returns_lifecycle_busy,
-//  ::reentrant_lifecycle_calls_are_allowed,
-//  redteam4_attacks.rs::r4_01/r4_03/r4_04,
-//  regression_core.rs::p2a_inflight_async_unload_reports_lifecycle_busy)
 // ---------------------------------------------------------------------------
 
 func TestCore045_ConcurrentLifecycleCallsAreBusy(t *testing.T) {
@@ -1167,7 +1138,6 @@ func TestCore045_CleanupPanicReleasesLifecycleSlot(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-047: child fibers are owned by their parent (cascade + rollback); deep
 // chains unload dependents-first; churn keeps bookkeeping bounded
-// (child_ownership.rs::*; regression_core.rs::c1_*/r3a4_*)
 // ---------------------------------------------------------------------------
 
 func newLeaf(name string, tr *trace, cleanups *atomic.Int64) *pluginFunc {
@@ -1433,7 +1403,6 @@ func TestCore047_ChildChurnKeepsBookkeepingBounded(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-050: cooperative cancellation through Context.Checkpoint
-// (quiescence.rs::checkpoint_observes_cooperative_cancellation)
 // ---------------------------------------------------------------------------
 
 func TestCore050_CheckpointObservesCooperativeCancellation(t *testing.T) {
@@ -1497,9 +1466,6 @@ func TestCore050_CheckpointHotLoopObservesCancellation(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-051: dispose_all shutdown path
-// (child_ownership.rs::dispose_all_reclaims_the_whole_tree,
-//  regression_core.rs::fix09_dispose_all_reports_the_panic_when_a_fiber_errors,
-//  redteam9_final.rs::t01/t02/t03/t06/t07/t08)
 // ---------------------------------------------------------------------------
 
 func TestCore051_DisposeAllReclaimsTree(t *testing.T) {

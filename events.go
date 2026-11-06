@@ -117,7 +117,7 @@ type waterfallEntry[T any] struct {
 // Events is the event bus of a context tree. Listeners are owned by the fiber
 // that registered them and are removed when that fiber unloads.
 //
-// There are two listener lanes because Go function types (like Rust closures)
+// There are two listener lanes because Go function types (like Cordis closures)
 // have one fixed signature: the sync lane (dispatched by Emit/Bail/Parallel and
 // the synchronous Waterfall) and the async lane (dispatched by ParallelAsync/
 // SerialAsync). Sync dispatch never runs async listeners. Both lanes share one

@@ -47,7 +47,7 @@
 | 类型化配置、服务契约、依赖门控、生命周期/回滚 | ✅（内核 + module 包） |
 | 多产品/OEM 共用同一内核、各自组装不同模块集 | ✅（各自 main + build tags） |
 | 运行期新增一个**未编译进二进制**的模块 | ❌ 必须重新构建 |
-| 加载非 Go 插件（Python/Node/Rust/Java…） | ❌（除非编译期写 adapter 包，由它管理外部进程；那已超出「纯编译期」定义） |
+| 加载非 Go 插件（Python/Node/Java…） | ❌（除非编译期写 adapter 包，由它管理外部进程；那已超出「纯编译期」定义） |
 | 不可信插件沙箱/权限隔离 | ❌（同二进制内所有模块同等可信；靠代码审查/供应链治理） |
 | 模块代码/配置热更新（不重启进程） | ❌（编译期路线；配置变更也走重启） |
 | 跨版本稳定 ABI | ❌（也不需要：全部静态链接） |
@@ -344,7 +344,7 @@ module.SafeGo("app/ticker", func() { /* ... */ })
 
 > **结论：没有重复造 core。** 官方把「加载器/配置树/HMR」放在 `cordis-plugin-loader` /
 > `plugin-include` / `plugin-group` / `plugin-hmr` 等独立生态包里，`cordis` core 只做
-> context/fiber/service/events/logger/reflect；Rust 参考也明确把 loader 归为宿主责任。
+> context/fiber/service/events/logger/reflect；Cordis 也把 loader 作为独立生态包。
 > `module` 包在 Go/静态链接路线下承担的是**官方 loader 生态的最小子集**（编译期注册表 +
 > 启动配置 + 预检 + 失败策略），并额外提供官方没有的编译期类型化清单/预检与 L0 崩溃契约。
 > 热配置更新被明确排除在默认设计之外（见 §4.2/§6.1），避免“做重”。

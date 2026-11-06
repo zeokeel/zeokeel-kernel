@@ -9,8 +9,8 @@ import (
 
 // AsyncCleanup is an asynchronous cleanup callback: it resolves once the
 // resource has been released. In Go it is a blocking function receiving a
-// context.Context; cancelling that context is the analogue of dropping the Rust
-// cleanup future.
+// context.Context; cancelling that context is the analogue of cancelling the
+// async cleanup.
 type AsyncCleanup func(ctx context.Context) error
 
 // AsyncEffect is the result of an async effect body: zero or more cleanup

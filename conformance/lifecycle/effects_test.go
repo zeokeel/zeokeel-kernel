@@ -10,10 +10,6 @@ import (
 // ---------------------------------------------------------------------------
 // CORE-007: effect registration is reverse-ordered and single-shot across the
 // sync and async lanes; attached/future effects are owned by the fiber.
-// (Rust: async_conformance.rs::sync_and_async_effects_share_reverse_registration_order,
-// ::async_cleanup_runs_in_reverse_order_once,
-// api_surface.rs::api_attach_effect_owns_an_external_disposer,
-// ::api_effect_future_async_registers_async_cleanups)
 // ---------------------------------------------------------------------------
 
 func TestCore007_SyncAndAsyncEffectsShareReverseRegistrationOrder(t *testing.T) {
@@ -224,7 +220,6 @@ func TestCore008_AsyncDisposerSingleShot(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-008: disposers are single-shot
-// (async_conformance.rs::async_disposer_is_single_shot)
 // ---------------------------------------------------------------------------
 
 func TestCore008_SyncDisposerSingleShot(t *testing.T) {
@@ -248,7 +243,6 @@ func TestCore008_SyncDisposerSingleShot(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CORE-009: sync dispose awaits async cleanups before returning
-// (async_conformance.rs::sync_dispose_awaits_async_cleanups_before_returning)
 // ---------------------------------------------------------------------------
 
 func TestCore009_SyncDisposeAwaitsAsyncCleanups(t *testing.T) {
@@ -280,7 +274,6 @@ func TestCore009_SyncDisposeAwaitsAsyncCleanups(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-011: an async cleanup panic does not skip the remaining cleanups; the
 // first panic is re-raised after the whole drain (payload preserved).
-// (async_conformance.rs::async_cleanup_panic_does_not_skip_remaining_cleanups)
 // ---------------------------------------------------------------------------
 
 type panicPayload struct {
@@ -321,9 +314,6 @@ func TestCore011_AsyncCleanupPanicDoesNotSkipRemaining(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-012: the diagnostics tree only reports live registrations; labels and
 // nesting are exact; a disposer removes its node (and nested ghosts disappear).
-// (fiber.rs::fiber_reports_effects_and_awaits_settlement,
-//  ::effect_disposer_removes_its_meta_node,
-//  regression_core.rs::c3_disposed_nested_effect_is_not_reported_in_the_tree)
 // ---------------------------------------------------------------------------
 
 func TestCore012_EffectTreeReflectsLiveRegistrations(t *testing.T) {
@@ -427,7 +417,6 @@ func TestCore012_DisposedNestedEffectIsNotAReportedGhost(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-030: a sync cleanup panic does not skip the remaining cleanups; the
 // first panic is re-raised after the full drain
-// (hardening.rs::cleanup_panic_does_not_skip_remaining_cleanups)
 // ---------------------------------------------------------------------------
 
 func TestCore030_CleanupPanicDoesNotSkipRemaining(t *testing.T) {

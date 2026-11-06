@@ -14,10 +14,9 @@ import (
 // ---------------------------------------------------------------------------
 // CORE-049: quiescence — Registry.IsIdle is strict, WhenIdle waits for slow
 // activations and async disposals, and the caller's own registration window is
-// the only excluded in-flight work (Go models the Rust "registration frame"
+// the only excluded in-flight work (Go models the Cordis "registration frame"
 // with the registering goroutine id, so a create-hook WhenIdle does not wait
 // for itself while an external waiter does).
-// Rust: quiescence.rs:28/35/86, regression_semantics.rs:1395/1341
 // ---------------------------------------------------------------------------
 
 func TestCore049_FreshRegistryIsIdle(t *testing.T) {
@@ -173,7 +172,7 @@ func TestCore049_WhenIdleWaitsForAsyncDisposal(t *testing.T) {
 }
 
 // TestCore049_RegistrationWindowSelfExemption covers the Go adaptation of the
-// Rust "own registration frame" exclusion: an internal/plugin create hook runs
+// Cordis "own registration frame" exclusion: an internal/plugin create hook runs
 // inside the registration window; WhenIdle from that same goroutine does not
 // wait for itself, while an external waiter must wait for the window to close.
 func TestCore049_RegistrationWindowSelfExemption(t *testing.T) {

@@ -14,9 +14,9 @@ import (
 // ---------------------------------------------------------------------------
 // CORE-046: cancelled async disposal
 //
-// Rust drops a future to cancel; the Go mapping is cancelling the
+// Cordis cancels an async operation; the Go mapping is cancelling the
 // context.Context passed to DisposeAsync. The cancellation contract
-// (docs/analysis/05-core-cases.md §5.3) is:
+// (spec/CORDIS-CORE.md §5.3) is:
 //   - cleanups that already started are lost (A-9, the only loss);
 //   - sync cleanups still run inline;
 //   - async cleanups that had not started are deferred to the next
@@ -241,7 +241,6 @@ func TestCore046_CancelledDisposeAsyncCompletesTeardown(t *testing.T) {
 }
 
 // TestCore046_CancelledDisposeAsyncRetryDrainsDeferred pins the A-9 retry
-// contract through the *async* entry point (regression_core.rs
 // a9_cancelled_dispose_async_completes_the_teardown / f1_retried_root_dispose_async).
 func TestCore046_CancelledDisposeAsyncRetryDrainsDeferred(t *testing.T) {
 	root := newRoot(t)
@@ -303,7 +302,6 @@ func TestCore046_CancelledDisposeAsyncRetryDrainsDeferred(t *testing.T) {
 }
 
 // TestCore046_CancelledTeardownWakesJoiner covers the joiner-release boundary
-// (redteam3_attacks.rs::at31): cancelling the owner must wake a joiner that was
 // waiting on the in-flight teardown; the joiner then retries the restored
 // cleanups and completes the teardown.
 func TestCore046_CancelledTeardownWakesJoiner(t *testing.T) {
@@ -495,8 +493,6 @@ func TestCore046_FiberSelfJoinInAsyncCleanup(t *testing.T) {
 // TestCore043_ConcurrentAsyncDisposeJoinsInflight: a second DisposeAsync while
 // the first owns the teardown must wait for it, not start a second drain; the
 // cleanup runs exactly once and a completed disposer returns immediately
-// (semantics.rs:242::concurrent_async_dispose_joins_the_inflight_cleanup,
-// redteam3_attacks.rs:1904::at29).
 func TestCore043_ConcurrentAsyncDisposeJoinsInflight(t *testing.T) {
 	tr := &trace{}
 	var runs atomic.Int64
@@ -551,9 +547,8 @@ func TestCore043_ConcurrentAsyncDisposeJoinsInflight(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CORE-037: an AsyncPlugin's inject gate is re-evaluated on refresh_async; the
 // synchronous refresh intentionally does not activate async fibers.
-// (hardening.rs::async_plugin_waits_for_inject_and_refresh_async)
 //
-// Go mapping note: the Rust test provides the service and then calls
+// Go mapping note: the Cordis test provides the service and then calls
 // `refresh()` before `refresh_async()`; in Go ctx.Provide already triggers the
 // synchronous Refresh internally, so the synchronous-refresh-still-Pending
 // assertion is made both right after Provide and after an explicit Refresh.
@@ -605,7 +600,7 @@ func TestCore037_AsyncPluginInjectGateRefreshedAsync(t *testing.T) {
 	}
 
 	// Removing the dependency does NOT unload the async fiber through the
-	// synchronous refresh: the Rust reference's sync refresh intentionally only
+	// synchronous refresh: the Cordis sync refresh intentionally only
 	// handles sync plugins, so the dependent stays Active (stale) until the next
 	// refresh_async.
 	gate.Dispose()

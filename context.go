@@ -9,7 +9,7 @@ import (
 // Context is a scoped dependency container and plugin context (Cordis Context).
 //
 // Context values are cheap handles: copying a Context is safe (the Go
-// counterpart of the Rust `Clone` on Arc<ContextInner>). Deriving a child with
+// safe to copy; deriving a child with
 // Extend/Isolate/Intercept/ExtendMeta never mutates the parent.
 type Context struct {
 	inner *contextInner
@@ -83,7 +83,7 @@ func Root() Context {
 		clock:     slot,
 	}
 	rootFiber.ctx = inner
-	// The root fiber's parent is itself (matches the Rust weak self-link; the Go
+	// The root fiber's parent is itself (matches the Cordis weak self-link; the Go
 	// cycle is collected by the GC and no strong-cycle contract is needed).
 	rootFiber.parent = inner
 	registry.setRootFiber(rootFiber)
@@ -295,7 +295,7 @@ func (c Context) SetClock(clock Clock) error {
 // a service re-evaluates the fibers that injected its name.
 //
 // It is a Go 1.27 generic method: the type argument is inferred from the
-// ServiceKey and the value, so typed access reads like the Rust reference:
+// ServiceKey and the value, so typed access reads like Cordis semantics:
 //
 //	cordis.Provide(ctx, key, value) // package-level wrapper
 //	ctx.Provide(key, value)         // method form (preferred)
@@ -1037,7 +1037,7 @@ func (c Context) createFiber(kind pluginKind, config Value, key PluginKey) (*Fib
 }
 
 // parentFiberData resolves the fiber of the parent context (the root fiber
-// returns itself, matching the Rust weak self-link).
+// returns itself, matching the Cordis weak self-link).
 func (d *fiberData) parentFiberData() *fiberData {
 	d.mu.Lock()
 	parent := d.parent

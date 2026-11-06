@@ -11,7 +11,7 @@ import (
 // of the kernel: the caller continues with its fallback value (or with the
 // remaining hooks). This is the single containment point for every boundary
 // where embedder code is called outside of activation/dispatch, mirroring the
-// Rust reference's catch_unwind policy.
+// Cordis panic-containment policy.
 func contained[T any](component, callback string, fallback T, body func() T) (result T) {
 	defer func() {
 		if r := recover(); r != nil {

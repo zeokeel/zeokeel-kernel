@@ -19,7 +19,7 @@ func nextOperationToken() uint64 { return globalOpToken.Add(1) }
 // lifecycle operation may call back into its own fiber (a cleanup disposing its
 // own fiber, an update hook restarting it) on the same execution unit, while a
 // concurrent call from another goroutine must return LifecycleBusy instead of
-// racing or deadlocking. The Rust reference tracks this with an operation token
+// racing or deadlocking. Cordis tracks this with an operation token
 // plus a thread/task-local frame; a Go goroutine is the equivalent execution
 // unit, so the token stack is keyed by goroutine id.
 type goroutineOps struct {

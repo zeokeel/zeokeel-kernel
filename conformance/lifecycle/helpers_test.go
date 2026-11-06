@@ -1,6 +1,6 @@
 // Package lifecycle_test is the Go conformance suite for the fiber /
-// effect / async-cancellation CORE cases of the Rust reference
-// (upstream zeokeel-cordis v0.6.0, spec/CORDIS-CORE.md §4).
+// effect / async-cancellation CORE cases of Cordis semantics
+// (spec/CORDIS-CORE.md §4).
 //
 // Every test builds its own cordis.Root() and registers a t.Cleanup that
 // disposes the tree, recovering from a re-raised cleanup panic so one failing
@@ -21,7 +21,7 @@ import (
 
 // childEnv marks a re-executed child test binary. Some CORE cases depend on
 // process-global state (the BlockingExecutor is install-once; the orphan queue
-// only receives async cleanups while no executor exists), mirroring the Rust
+// only receives async cleanups while no executor exists), mirroring the Cordis
 // reference's separate integration-test binaries. Running those tests in a
 // fresh child process makes them independent of test order and of -count
 // iterations.

@@ -10,10 +10,9 @@ import (
 // L2 runtime defenses: capability introspection, per-fiber quotas and
 // watchdog/heartbeat support.
 //
-// The Go kernel uses the same model as the Rust reference but ships the
+// The Go kernel uses the same model as Cordis semantics but ships the
 // supervision surface unconditionally: the bookkeeping is a couple of atomics
-// per fiber, so the Rust `supervision` cargo feature (compile-time size
-// optimization) has no Go equivalent worth a build tag.
+// per fiber, so a compile-time feature gate has no worthwhile Go equivalent.
 
 // IsolationCapabilities reports what this build can and cannot contain.
 //
@@ -26,7 +25,7 @@ type IsolationCapabilities struct {
 	// PanicContainment reports whether panics from plugin code are contained.
 	PanicContainment bool
 	// UnsafeForbidden reports whether the kernel itself avoids unsafe (Go code
-	// cannot express Rust's unsafe; the kernel uses no unsafe package).
+	// cannot express unsafe; the kernel uses no unsafe package).
 	UnsafeForbidden bool
 	// ProcessIsolation is an embedder (L3) layer, never provided by the kernel.
 	ProcessIsolation bool
@@ -52,7 +51,7 @@ func (c IsolationCapabilities) Summary() string {
 }
 
 // FiberQuota is the per-fiber resource limit set. The zero value means
-// unlimited (idiomatic Go zero value; the Rust reference uses Option<usize>).
+// unlimited (idiomatic Go zero value).
 //
 // Quotas are checked when a resource is registered, so a plugin that exceeds
 // them gets a QuotaExceeded error and its activation rolls back through the

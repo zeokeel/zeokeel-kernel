@@ -65,9 +65,9 @@ gh api repos/zeokeel/zeokeel-kernel | jq '.default_branch,.allow_squash_merge,.a
 
 1. 合并 PR 到 `main`，确认 CI 全绿；
 2. 本地运行 `make preflight`（见 [RELEASE-PREFLIGHT.md](RELEASE-PREFLIGHT.md)），确认只剩发布元数据提示；
-3. 打 annotated tag 并推送：`git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0`；
+3. 打 annotated tag 并推送：`git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`；
 4. `.github/workflows/release.yml` 在 tag 上重跑 `scripts/ci.sh` 并创建 GitHub Release（自动生成 notes）；
-5. 在干净目录验证 `go get github.com/zeokeel/zeokeel-kernel@v0.1.0` 可用。
+5. 在干净目录验证 `go get github.com/zeokeel/zeokeel-kernel@vX.Y.Z` 可用。
 
 ## 5. 仓库文件清单
 
