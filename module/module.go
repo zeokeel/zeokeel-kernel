@@ -1,5 +1,5 @@
 // Package module provides a compile-time module registry and config-driven
-// assembly layer for the Cordis Go kernel.
+// assembly layer for the Zeokeel Kernel (package cordis).
 //
 // The registry is the "link-time" half of the universal-kernel idea: a host
 // binary explicitly registers the Go modules it was compiled with (there is no

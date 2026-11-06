@@ -39,10 +39,11 @@
 | 语义化版本 tag | ⚠️ 无（首次发布前创建，如 `v0.1.0`） |
 | `reference/` 体积 | ⚠️ 2.1MB 位于 module root，会被打进 Go module zip |
 
-汇总：**本地代码门禁全部通过**；`make preflight` 在推送前会把“远端不可达 / 无 tag”作为
-非阻塞提醒（远端尚未 push），发布前以实际运行结果为准。
+最终本地预检（clean worktree，2026-11-06）：**passed=27 / warnings=3 / failed=0**，脚本判定
+`READY`。三个 warning 分别是：远端尚未创建/推送、尚无版本 tag、`reference/` 体积提醒。
+分支保护与必需 CI 检查的配置见 [`REPOSITORY-SETUP.md`](REPOSITORY-SETUP.md)。
 
-## 3. 阻塞项与修复
+## 3. 剩余发布动作
 
 ### 3.1 模块尚未发布到远端（剩余发布动作）
 

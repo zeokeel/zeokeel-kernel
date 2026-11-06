@@ -1,4 +1,4 @@
-// Command hello is the minimal Cordis Go plugin example.
+// Command hello is the minimal Zeokeel Kernel plugin example.
 //
 // It mirrors upstream examples/hello.rs: a plugin registers one effect whose
 // cleanup runs exactly once, in reverse registration order, when the fiber is
