@@ -429,7 +429,7 @@ drain frames），不再递归；**ownership 子树**仍通过 effect cleanup �
 
 - goroutine 成本（~2KB 栈）远高于 Rust future（零分配可 inline）；大量 `parallel_async`/EffectStream
   会产生更多堆/栈；
-- `weak.Pointer` 需要 GC 支持，频繁创建/失效有额外成本（v0 只在 provider/watch 用）；
+- `weak.Pointer` 需要 GC 支持，频繁创建/失效有额外成本（v0 用于 provider/watch/registry.root）；
 - `-race` 的原子/锁开销约 5–20 倍，仅测试启用。
 
 ### 4.6 性能结论

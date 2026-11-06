@@ -61,7 +61,7 @@
 | 项 | v0 行为 | 影响 |
 |---|---|---|
 | `Drop` 安全网 | 无；显式 `Dispose`/`DisposeAll`/`Abandon` | 丢句柄不清理 |
-| `Weak` 存活 | provider 用 `weak.Pointer`，但可用性由 `State()` 判 | 不依赖 GC 时点 |
+| `Weak` 存活 | provider/root 用 `weak.Pointer`，但可用性由 `State()` 判 | 不依赖 GC 时点 |
 | 双 lane | 合并为 `any`，无 `ArcWrap`/lane 标记 | CORE-032 接口用例可过，但原 lane 身份规则丢失 |
 | 反向依赖索引 | 简化版 `depIndex`（inject 名→fiber ids）仅用于 **cascade**；refresh 仍全量扫描 | cascade 按受影响 dependent 收敛；refresh 大 fanout 仍是 O(F×64) |
 | 迭代级联 | 依赖 dependent 已两阶段 `beginCascade`+逆序 drain；ownership 子树仍靠 effect cleanup 递归 | 注入链近 O(1) 帧；父子链依赖 Go 栈增长 |
@@ -351,7 +351,8 @@ Refresh。`activateAsync` 同构；ctx 取消时丢弃本 epoch 并回 Pending�
 ### 5.3 卸载与级联（`unload`/`beginCascade`）
 
 1. `beginUnload`：锁内取 effects+deferred+ctx；已 Disposed 且有残留→retry 分支（只排干 tail）；
-   否则 transition(Unloading) → withdrawOwnerServices → Refresh（依赖方先失活）。
+   否则 transition(Unloading) → withdrawOwnerServices（依赖方由下一步 `beginCascade` 卸载，不再
+   做一次全量 Refresh）。
 2. `beginCascade(frontier)`：用 `depIndex` 从 withdrawn 服务名出发取候选（`dependentsOfNames`），对
    Active 且 !dependenciesSatisfied 的 fiber `beginUnload` 并收集 frame；新 frame 的 withdrawn 继续
    frontier，`visited` 去重；**不递归**。随后**逆序 drain frames**（dependent-before-provider），再 drain
@@ -629,7 +630,7 @@ CORE-037 尚无测试（P0）。
 | 050 | cancel/checkpoint | lifecycle/fiber | conf |
 | 051 | dispose_all | lifecycle/fiber | conf |
 
-> 说明：`conformance/` 实际共 约 150 个测试，覆盖 50/51 CORE；CORE-037 待 P0 修复后补测。
+> 说明：`conformance/` 实际约 150 个测试，覆盖 50/51 CORE；CORE-037 待 P0 修复后补测。
 > CORE-033 的 Rust 断言是“无强环”，Go 用 GC/finalizer 探针改写；CORE-046/049 的 parked/recovery
 > 部分在 Go 中 N/A（见 §6.2）。测试断言以仓库当前版本为准。
 ---

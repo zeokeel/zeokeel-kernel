@@ -204,6 +204,13 @@ func (d *fiberData) removeProvided(name string) {
 	d.mu.Unlock()
 }
 
+// isAsyncPlugin reports whether the fiber hosts an AsyncPlugin.
+func (d *fiberData) isAsyncPlugin() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.plugin.async != nil
+}
+
 // providedNamesSnapshot returns a copy of the service names this fiber provides.
 func (d *fiberData) providedNamesSnapshot() []string {
 	d.mu.Lock()
@@ -2041,6 +2048,9 @@ func (d *fiberData) swapPluginMetadata(metadata replacementMetadata, key PluginK
 			d.registry.unregisterRuntimeFiberFromKey(d.id, oldKey)
 		}
 		d.registry.rebindFiber(d, key, metadata.name)
+		// The new implementation may declare a different Inject list: rebuild the
+		// reverse dependency edges so cascade/refresh see the new dependencies.
+		d.registry.reindexFiberDeps(d.id, metadata.inject)
 	}
 	return oldKind, oldKey, oldName
 }
@@ -2065,5 +2075,6 @@ func (d *fiberData) restorePluginMetadata(oldKind pluginKind, oldKey PluginKey, 
 	if d.registry != nil {
 		d.registry.unregisterRuntimeFiberFromKey(d.id, currentKey)
 		d.registry.rebindFiber(d, oldKey, oldName)
+		d.registry.reindexFiberDeps(d.id, d.injectSnapshot())
 	}
 }

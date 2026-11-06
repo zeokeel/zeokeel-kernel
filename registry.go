@@ -474,6 +474,10 @@ func (r *Registry) refreshCandidate(data *fiberData) bool {
 	if actx == nil {
 		return false
 	}
+	// Sync dependents refresh skips async plugins (use RefreshAsync).
+	if data.isAsyncPlugin() {
+		return false
+	}
 	switch data.stateSnapshot() {
 	case Active:
 		if data.dependenciesSatisfied(*actx) {
@@ -522,6 +526,14 @@ func (r *Registry) RefreshDependents() {
 		}
 		changed := false
 		for _, candidate := range r.dependentsOfNames(names) {
+			if candidate.isAsyncPlugin() {
+				// Leave async dependents to RefreshAsync: re-mark their inject
+				// names so an async refresh still sees the change.
+				for _, name := range candidate.injectSnapshot() {
+					r.noteServiceChanged(name)
+				}
+				continue
+			}
 			if r.refreshCandidate(candidate) {
 				changed = true
 			}
@@ -915,6 +927,11 @@ func (r *Registry) refreshPass(asyncMode bool) bool {
 	for _, data := range r.liveFibers() {
 		ctxOpt := data.contextRef()
 		if ctxOpt == nil {
+			continue
+		}
+		// A synchronous refresh only handles sync plugins: async activation and
+		// async unload require an await point (Rust: use RefreshAsync).
+		if !asyncMode && data.isAsyncPlugin() {
 			continue
 		}
 		actx := *ctxOpt
