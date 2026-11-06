@@ -4,7 +4,7 @@
 // The kernel is a standard-library-only library: it must not grow host/IO or
 // business imports, must not import its own example/conformance/reference
 // packages, and must keep a bounded public API surface. These checks mirror
-// the Rust reference's reference/zeokeel-cordis-rust/tests/kernel_boundary.rs.
+// the upstream Rust reference's tests/kernel_boundary.rs.
 //
 // Everything here is deliberately test-only: the checks parse source files and
 // never link against the kernel, so they can run even while the rest of the
@@ -304,7 +304,7 @@ func countExportedAPI(root string, files []string) (int, error) {
 }
 
 // rootGoFiles lists non-test Go files present directly in the kernel root.
-// Subdirectories (reference/, examples/, conformance/, .git, internal/archtest
+// Subdirectories (examples/, conformance/, .git, internal/archtest
 // and any future internal package) are outside the kernel package and are not
 // scanned.
 func rootGoFiles(t *testing.T, root string) []string {

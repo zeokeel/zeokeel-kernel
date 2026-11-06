@@ -22,6 +22,6 @@ SOFTWARE.
 
 ---
 
-The directory `reference/zeokeel-cordis-rust/` contains a verbatim copy of the
-upstream project https://github.com/zeokeel/zeokeel-cordis (MIT), included as
-read-only reference material. Its copyright remains with the upstream authors.
+Upstream attribution: this project is an independent Go reimplementation of
+https://github.com/zeokeel/zeokeel-cordis (MIT). No upstream Rust source is
+redistributed in this repository.
