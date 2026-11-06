@@ -22,8 +22,9 @@ func (e *LoadError) Error() string {
 	return "module: assembly failed to start:\n  - " + strings.Join(e.Issues, "\n  - ")
 }
 
-// Instance is one loaded module instance. Entry IDs are stable across reloads;
-// kernel fiber IDs are not, so hosts should key their own maps by Instance.ID.
+// Instance is one loaded module instance. Entry IDs are stable for the process
+// lifetime; kernel fiber IDs are not, so hosts should key their own maps by
+// Instance.ID.
 type Instance struct {
 	entryID   string
 	moduleID  string
@@ -71,7 +72,7 @@ func (i *Instance) Children() []*Instance {
 }
 
 // Loader owns one loaded assembly tree: stable entry IDs mapped to fibers,
-// reload/close operations, warnings for optional modules, and locate.
+// close/locate operations, warnings for optional modules, and health reporting.
 type Loader struct {
 	root      cordis.Context
 	registry  *Registry

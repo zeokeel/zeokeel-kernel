@@ -9,7 +9,7 @@ GOFMT ?= gofmt
 # Every Go source in the module except the Rust reference tree and VCS data.
 GO_FILES := $(shell find . -type f -name '*.go' -not -path './.git/*' -not -path './reference/*' | sort)
 
-.PHONY: all build check fmt vet test race cover ci clean
+.PHONY: all build check fmt vet test race cover ci preflight clean
 
 all: check build test
 
@@ -48,6 +48,11 @@ cover:
 
 # CI gate: static checks, build, then tests (in that order).
 ci: check build test
+
+# Release pre-flight: CI gates + module hygiene, coverage, cross-builds, API
+# docs, release metadata. See docs/RELEASE-PREFLIGHT.md.
+preflight:
+	./scripts/release-preflight.sh
 
 clean:
 	rm -rf dist

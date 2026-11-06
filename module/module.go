@@ -3,8 +3,8 @@
 //
 // The registry is the "link-time" half of the universal-kernel idea: a host
 // binary explicitly registers the Go modules it was compiled with (there is no
-// dynamic code loading), and a JSON/YAML-shaped entry tree selects, configures
-// and nests those modules at startup. The kernel remains unchanged; the
+// dynamic code loading), and a JSON entry tree selects, configures and nests
+// those modules at startup. The kernel remains unchanged; the
 // registry adds what a real module system needs on top of it:
 //
 //   - typed module descriptors (ID, version, provided/required service
@@ -14,8 +14,7 @@
 //     are reported before any fiber is created;
 //   - optional requirements and optional entries (a missing optional
 //     dependency never leaves a module silently Pending);
-//   - stable instance IDs, a parent/child entry tree, locate/reload/close
-//     operations;
+//   - stable instance IDs, a parent/child entry tree, locate/close operations;
 //   - a startup failure policy that separates "required" from "optional"
 //     modules and rolls the tree back on a required failure.
 //

@@ -11,10 +11,15 @@ import (
 type DispatchMode uint8
 
 const (
+	// DispatchEmit is a fire-and-forget event emit.
 	DispatchEmit DispatchMode = iota + 1
+	// DispatchParallel fans listeners out concurrently and waits for all of them.
 	DispatchParallel
+	// DispatchSerial invokes listeners one after another in registration order.
 	DispatchSerial
+	// DispatchBail stops at the first listener that returns a non-nil result.
 	DispatchBail
+	// DispatchWaterfall threads a mutable value through listeners in order.
 	DispatchWaterfall
 )
 

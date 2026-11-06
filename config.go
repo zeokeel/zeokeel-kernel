@@ -16,10 +16,15 @@ import (
 type JsonType uint8
 
 const (
+	// JSONString matches JSON string values.
 	JSONString JsonType = iota + 1
+	// JSONNumber matches JSON numeric values.
 	JSONNumber
+	// JSONBool matches JSON boolean values.
 	JSONBool
+	// JSONObject matches JSON objects (map-shaped values).
 	JSONObject
+	// JSONArray matches JSON arrays (slice-shaped values).
 	JSONArray
 )
 

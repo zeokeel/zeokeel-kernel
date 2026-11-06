@@ -18,8 +18,8 @@ type PanicReport struct {
 }
 
 // PanicHandler receives contained module panics. Hosts should install one to
-// turn a contained panic into an alert/metric and decide whether to recreate,
-// reload or quarantine the module.
+// turn a contained panic into an alert/metric and decide whether to restart the
+// process or isolate the module in a separate process group.
 type PanicHandler func(PanicReport)
 
 var panicHandlers struct {

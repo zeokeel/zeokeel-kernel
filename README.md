@@ -234,6 +234,7 @@ make build   # go build ./...
 make test    # go test ./...
 make race    # go test -race ./... -timeout 10m
 make ci      # check + build + test
+make preflight  # 发布预检：CI 门禁 + module 卫生 + 覆盖率 + 交叉编译 + API 文档 + 发布元数据
 ```
 
 当前基线（本地实测）：
@@ -271,7 +272,7 @@ make ci      # check + build + test
 ├── internal/archtest/        # 内核边界架构测试（go/parser）
 ├── docs/                     # 架构分析 / 可行性 / Go 设计 / 上游分析笔记
 ├── reference/zeokeel-cordis-rust/  # 上游 Rust 源码只读参考（v0.6.0）
-├── Makefile  scripts/ci.sh  .github/workflows/ci.yml
+├── Makefile  scripts/ci.sh  scripts/release-preflight.sh  .github/workflows/ci.yml
 └── go.mod
 ```
 

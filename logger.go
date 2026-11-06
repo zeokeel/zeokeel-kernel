@@ -12,9 +12,13 @@ import (
 type LogLevel uint8
 
 const (
+	// LogError is the error severity (highest priority).
 	LogError LogLevel = iota
+	// LogWarn is the warning severity.
 	LogWarn
+	// LogInfo is the informational severity.
 	LogInfo
+	// LogDebug is the debug severity (lowest priority).
 	LogDebug
 )
 
