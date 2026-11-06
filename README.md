@@ -9,9 +9,8 @@
 **纯 Go 的可插拔内核**：实现 Cordis 的「时空可组合」上下文范式——Context 树提供作用域，
 插件运行在 fiber 上，所有副作用按逆序完整撤销，依赖声明驱动插件的激活与停用。
 
-> **Zeokeel Kernel** 是 [zeokeel/zeokeel-cordis](https://github.com/zeokeel/zeokeel-cordis)
-> （Rust v0.6.0，MIT）的 Go 重实现，语义对齐 CORE-001…051。上游 Rust 源码不在本仓库再分发，
-> 请以 GitHub 上游仓库为准。Go 包名保留 `cordis` 以保持与上游/官方 Cordis 的语义连续性。
+> **Zeokeel Kernel** 是 Cordis 范式的纯 Go 内核实现：语义对齐 CORE-001…051，Go 包名保留
+> `cordis` 以保持与 Cordis 的语义连续性。
 >
 > 这是**内核**，不是框架：只提供组合原语与生命周期语义。模块装配、权限、沙箱、进程/WASM
 > 隔离属于使用它的宿主（embedder）；本仓库额外提供可选的编译期模块注册表 `module/`。
@@ -19,7 +18,7 @@
 | | 状态 |
 | --- | --- |
 | 语言 | Go 1.27（泛型方法、`weak`、`sync.WaitGroup.Go`；仅标准库，零第三方依赖） |
-| 语义基线 | Rust v0.6.0 `spec/CORDIS-CORE.md`（CORE-001…051） |
+| 语义基线 | Cordis CORE-001…051 |
 | 测试 | 233 个（内核 56、conformance 154、module 21、archtest 2），**CORE-001…051 全覆盖** |
 | 覆盖率 | 聚合约 **79.9%**（`-coverpkg=...kernel,module`） |
 | 发布 | 语义化版本 tag；严格 CI；`main` 分支受保护，只允许 PR |
@@ -118,14 +117,11 @@ panic 遏制。**刻意不做进程内热配置更新**（配置变更=重启）
 
 | 文档 | 内容 |
 | --- | --- |
-| [`docs/ARCHITECTURE-ANALYSIS.md`](docs/ARCHITECTURE-ANALYSIS.md) | Rust 内核架构全解（分层、数据结构、状态机、锁纪律、不变量、CORE 映射） |
-| [`docs/GO-FEASIBILITY.md`](docs/GO-FEASIBILITY.md) | Rust→Go 语言特性映射、语义差异、风险与缓解 |
 | [`docs/GO-DESIGN.md`](docs/GO-DESIGN.md) | Go 侧设计：包布局、API 约定、并发模型、生命周期实现、简化与路线图 |
 | [`docs/CORDIS-COMPARISON.md`](docs/CORDIS-COMPARISON.md) | 与官方 TypeScript Cordis 4.1.0 的特性级对照与通用内核评估 |
 | [`docs/COMPILE-TIME-REGISTRY.md`](docs/COMPILE-TIME-REGISTRY.md) | 编译期模块注册表设计审查、热配置更新取舍、崩溃隔离边界 |
 | [`docs/RELEASE-PREFLIGHT.md`](docs/RELEASE-PREFLIGHT.md) | Go module 发布预检报告与发布步骤 |
 | [`docs/REPOSITORY-SETUP.md`](docs/REPOSITORY-SETUP.md) | 仓库配置：分支保护、必需 CI 检查、合并策略、发布流程 |
-| [`docs/analysis/`](docs/analysis/) | 5 份上游源码深度分析笔记（带 `file:line` 引用） |
 
 ## 开发
 
@@ -188,7 +184,7 @@ GitHub Actions 检查：
 发布：推送 `v*` tag 触发 [`release.yml`](.github/workflows/release.yml)，先跑严格 CI 再创建
 GitHub Release（发布步骤见 [`docs/RELEASE-PREFLIGHT.md`](docs/RELEASE-PREFLIGHT.md)）。
 
-## 已知边界（与 Rust/官方实现的有意差异）
+## 已知边界（Cordis 语义的有意简化）
 
 - **Go 无析构器**：确定性清理通过显式 `Dispose/DisposeAll/Abandon` + 有界 orphan 队列承担；
 - **panic 遏制只到同 goroutine**：模块自己的 goroutine 必须用 `module.SafeGo/SafeCall`；
@@ -198,11 +194,7 @@ GitHub Release（发布步骤见 [`docs/RELEASE-PREFLIGHT.md`](docs/RELEASE-PREF
 - **部分官方 4.1 特性未移植**：Proxy 服务属性、callable services、`ctx.mixin`、装饰器、
   volatile config、`internal/commit`、loader 生态等（见 CORDIS-COMPARISON）。
 
-## License 与上游
+## License
 
 - 本仓库：[MIT](LICENSE)，Copyright (c) 2026 Zeokeel Kernel contributors。
-- 语义与设计参考：
-  - [zeokeel/zeokeel-cordis](https://github.com/zeokeel/zeokeel-cordis)（Rust，MIT）；
-  - 官方 [deepseek-ai/cordis](https://github.com/deepseek-ai/cordis) TypeScript 实现
-    （论文 *A Programming Paradigm for Spatiotemporal Composability*）。
-- 上游 Rust 源码不在本仓库再分发，请以 [zeokeel/zeokeel-cordis](https://github.com/zeokeel/zeokeel-cordis) 为准（MIT）。
+- Zeokeel Kernel 是 Cordis 范式的独立 Go 实现。
