@@ -201,9 +201,9 @@ func TestCore007_InactiveFiberRejectsNewEffects(t *testing.T) {
 	assertCode(t, awaitChan(t, "attach during unload", attachErr), cordis.CodeInactiveEffect)
 }
 
-// TestCore007_AsyncDisposerSingleShot is the AsyncDisposer layer of CORE-007/008:
+// TestCore008_AsyncDisposerSingleShot is the AsyncDisposer layer of CORE-008:
 // reverse order and exactly-once across repeated calls.
-func TestCore007_AsyncDisposerSingleShot(t *testing.T) {
+func TestCore008_AsyncDisposerSingleShot(t *testing.T) {
 	tr := &trace{}
 	d := cordis.NewAsyncDisposer([]cordis.AsyncCleanup{
 		asyncCleanupOf("first", tr),
