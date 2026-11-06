@@ -409,6 +409,84 @@ func TestCore015_AvailabilityCheckMayReadOtherServices(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CORE-016: losing an injected service unloads an Active fiber to Pending (not
+// Failed/Disposed), and a later provider can reactivate it.
+// ---------------------------------------------------------------------------
+
+func TestCore016_ServiceRemovalUnloadsActiveDependent(t *testing.T) {
+	root := newRoot(t)
+
+	// Gate branch: closing the availability check unloads the dependent.
+	gateKey := cordis.NewServiceKey[int]("core016.gated")
+	gate := cordis.NewServiceGate(true)
+	if _, err := cordis.ProvideGated(root, gateKey, 1, gate); err != nil {
+		t.Fatalf("provide gated: %v", err)
+	}
+	gateHits := 0
+	gateDependent, err := root.Plugin(&funcPlugin{
+		name:   "core016-gate-dependent",
+		inject: []string{gateKey.Name()},
+		activate: func(cordis.Context, cordis.Value) error {
+			gateHits++
+			return nil
+		},
+	}, nil)
+	mustNoError(t, err, "load gate dependent")
+	needState(t, gateDependent, cordis.Active, "gate dependent")
+	if gateHits != 1 {
+		t.Fatalf("gate dependent applies = %d, want 1", gateHits)
+	}
+	gate.Set(false)
+	needState(t, gateDependent, cordis.Pending, "dependent after gate closed")
+	gate.Set(true)
+	needState(t, gateDependent, cordis.Active, "dependent after gate reopened")
+	if gateHits != 2 {
+		t.Fatalf("gate dependent applies after reopen = %d, want 2", gateHits)
+	}
+
+	// Provider-unload branch: the fiber lands Pending and can be reactivated by
+	// a later provider of the same name.
+	key := cordis.NewServiceKey[int]("core016.provider")
+	provider, err := root.Plugin(&funcPlugin{
+		name: "core016-provider",
+		activate: func(ctx cordis.Context, _ cordis.Value) error {
+			_, err := cordis.Provide(ctx, key, 3)
+			return err
+		},
+	}, nil)
+	mustNoError(t, err, "load provider")
+	hits := 0
+	dependent, err := root.Plugin(&funcPlugin{
+		name:   "core016-provider-dependent",
+		inject: []string{key.Name()},
+		activate: func(cordis.Context, cordis.Value) error {
+			hits++
+			return nil
+		},
+	}, nil)
+	mustNoError(t, err, "load provider dependent")
+	needState(t, dependent, cordis.Active, "provider dependent")
+	if hits != 1 {
+		t.Fatalf("dependent applies = %d, want 1", hits)
+	}
+
+	mustNoError(t, provider.Dispose(), "dispose provider")
+	needState(t, dependent, cordis.Pending, "dependent after provider unload must be Pending")
+	if _, ok := cordis.Get(root, key); ok {
+		t.Fatal("service still visible after provider unload")
+	}
+
+	// Pending is not terminal: a new provider reactivates the dependent.
+	if _, err := cordis.Provide(root, key, 4); err != nil {
+		t.Fatalf("re-provide: %v", err)
+	}
+	needState(t, dependent, cordis.Active, "dependent after re-provide")
+	if hits != 2 {
+		t.Fatalf("dependent applies after re-provide = %d, want 2", hits)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // CORE-032: interface-typed service keys (the trait-object lane) round-trip a
 // dynamic implementation and disappear with their provider.
 // ---------------------------------------------------------------------------
@@ -457,7 +535,11 @@ func TestCore032_InterfaceTypedServiceKey(t *testing.T) {
 // See docs/analysis/05-core-cases.md §5.1.
 // ---------------------------------------------------------------------------
 
-type core033Plugin struct{}
+// core033Plugin is deliberately non-zero-sized: Go does not run finalizers for
+// zero-size allocations (they alias runtime.zerobase and never become garbage).
+type core033Plugin struct {
+	pad [8]byte
+}
 
 func (*core033Plugin) Name() string { return "core033-plugin" }
 func (*core033Plugin) Activate(cordis.Context, cordis.Value) error {

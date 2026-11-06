@@ -858,6 +858,10 @@ func (d *fiberData) finishUnload(batch *unloadBatch, target FiberState) {
 		registry := d.registry
 		d.ctx = nil
 		d.parent = nil
+		// Break the fiber→registry→root-fiber cycle so a disposed tree is
+		// collectable (Go finalizers in cyclic garbage are not guaranteed to
+		// run; CORE-033).
+		d.registry = nil
 		d.mu.Unlock()
 		if registry != nil {
 			registry.unregisterRuntimeFiber(d.id)
@@ -1899,9 +1903,15 @@ func (d *fiberData) swapPluginMetadata(metadata replacementMetadata, key PluginK
 }
 
 // restorePluginMetadata restores a previous plugin implementation.
+//
+// The fiber is detached from whatever runtime key it currently holds before
+// being re-bound to the restored key, so a failed Registry.Replace leaves no
+// stranded runtime behind (CORE-048: rollback must restore the registry
+// exactly).
 func (d *fiberData) restorePluginMetadata(oldKind pluginKind, oldKey PluginKey, oldName string, restoreKey PluginKey) {
 	_ = restoreKey
 	d.mu.Lock()
+	currentKey := d.runtimeKey
 	d.plugin = oldKind
 	d.pluginName = oldName
 	d.inject = oldKind.inject()
@@ -1910,6 +1920,7 @@ func (d *fiberData) restorePluginMetadata(oldKind pluginKind, oldKey PluginKey, 
 	d.hasRuntime = true
 	d.mu.Unlock()
 	if d.registry != nil {
+		d.registry.unregisterRuntimeFiberFromKey(d.id, currentKey)
 		d.registry.rebindFiber(d, oldKey, oldName)
 	}
 }

@@ -429,9 +429,23 @@ func (c Context) GetNamed(name string) (ServiceValue, bool) {
 //
 // Only the fiber that provided the service may set it; the replacement must have
 // the same concrete type. A computed accessor read/write is honored first.
+//
+// The write is a revertible, classified mutation (CORE-041): an inverse effect is
+// registered on the providing fiber and the entry version bump re-evaluates the
+// dependents. Use SetRevertibleNamed when the caller wants the inverse disposer
+// handle to undo the write early.
 func (c Context) SetNamed(name string, value ServiceValue) error {
 	_, err := c.setRevertible(name, value)
 	return err
+}
+
+// SetRevertibleNamed is SetNamed that returns the inverse disposer.
+//
+// Disposing it restores the previous service entry (and re-evaluates dependents);
+// the inverse is also owned by the providing fiber, so unloading runs it in
+// reverse registration order exactly once.
+func (c Context) SetRevertibleNamed(name string, value ServiceValue) (*Disposer, error) {
+	return c.setRevertible(name, value)
 }
 
 // setRevertible overwrites a service as a revertible, classified mutation: the

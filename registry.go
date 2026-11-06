@@ -251,7 +251,10 @@ func (r *PluginRuntime) snapshot() []*fiberData {
 type Registry struct {
 	mu       sync.Mutex
 	runtimes map[PluginKey]*PluginRuntime
-	root     *fiberData
+	// root is a weak handle: a disposed root fiber must be collectable without
+	// the registry pinning it (CORE-033; the Rust reference uses weak self-links
+	// for the same reason).
+	root weak.Pointer[fiberData]
 
 	fibersMu sync.Mutex
 	fibers   []*fiberData
@@ -296,14 +299,15 @@ func NewRegistry() *Registry {
 
 func (r *Registry) setRootFiber(f *fiberData) {
 	r.mu.Lock()
-	r.root = f
+	r.root = weak.Make(f)
 	r.mu.Unlock()
 }
 
 func (r *Registry) rootFiber() *fiberData {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.root
+	root := r.root
+	r.mu.Unlock()
+	return root.Value()
 }
 
 func (r *Registry) nextFiberID() uint64 { return r.nextID.Add(1) }
