@@ -110,6 +110,15 @@ Go v0 代码逐项判定；无法判定的标“待验证”，不臆测。
 | 缓解 | ①goid 只用于“是否同一在飞操作”的判定，不用于所有权转移（v0 注释已声明）；②所有生命周期入口走 `withLifecycle` 安装 token；③提供显式 `DrainFrame` 语义（ctx 传递）；④若 Lead 否决 goid：改为“所有入口新 token + 内部显式 op handle”，代价是 cleanup 内重入变为 LifecycleBusy（与 Rust 不同），需在 GO-DESIGN 标注；⑤测试覆盖“同 goroutine 重入/跨 goroutine Busy” |
 | v0 状态 | 已实现：`runtime_goid.go`（`runtime.Stack` 解析）、`op_token.go`（token 栈）、`async_effects.go`（drain frame ctx）；**activation epoch 用 fiber 字段 + 显式参数近似**，没有 Rust 的嵌套 frame 栈 |
 
+逐站点对照：
+
+| 站点 | Rust 机制 | Go v0 机制 | 状态 / 风险 |
+|---|---|---|---|
+| activation frame | `ACTIVATION_FRAMES` + `EpochFrame`/`EpochFrameFuture` 每 poll 安装 | fiber 的 `activatingEpoch` 字段 + 显式 `activation` 标签；**无嵌套 frame 栈** | 近似；嵌套激活/并发 activation 可能打错 epoch（中高） |
+| lifecycle thread token | `THREAD_TOKEN` 每线程惰性一个；`current_lifecycle_token()` | `runtime_goid.go` 解析 goroutine id + `op_token.go` token 栈 | 已实现；goid 非官方 API（高） |
+| current op token | `CURRENT_OP_TOKEN` Cell，`WithOperationToken` 每次 poll 安装/还原 | `pushCurrentOpToken(token)` 在 `withLifecycle` 安装/还原 | 已实现；async 操作换 goroutine 后 token 不可见（高） |
+| drain frame / self-join | `DRAIN_FRAMES` thread-local，key=DisposeState 地址 | `context.Context` 里的 `drainFrames`，`withDrainFrame` 每 cleanup 派生 | 已实现；cleanup 不把 ctx 传回则 self-join 失效（中） |
+
 **结论**：三处 thread_local 各有替代，但 **goid 是唯一“非官方”依赖**，是 v0 的主要技术债。
 
 ### 2.5 `async`/future → goroutine + `context.Context`
@@ -123,6 +132,17 @@ Go v0 代码逐项判定；无法判定的标“待验证”，不臆测。
 | 缓解 | ①明确契约：取消时“未启动恢复、已启动等待或放行、目标状态必达”；②`DisposeAsync` 返回 `ctx.Err()`；③`DisposeBlocking(ctx)` 作为重试恢复入口；④`Abandon`+orphan 处理无显式 dispose；⑤不做假 `block_on`，禁止在事件循环 goroutine 上调用同步 Dispose（文档） |
 | v0 状态 | 已实现：AsyncDisposer（claim/join/cancel restore/self-join）、`drainEffectsAsync`（A-9 落 Pending/Disposed）、orphan；`BlockingExecutor` 可选。未实现：parked frames/recovery、`when_idle` recovery 循环（因无停摆帧，见 §3.3） |
 
+取消点的逐项映射：
+
+| Rust 的“drop 点” | Rust 语义 | Go v0 等价 | 保留 / 丢失 |
+|---|---|---|---|
+| 激活 future 被 host drop | `AsyncActivationGuard` 回收本 epoch effect；必要时 Failed | `ActivateAsync` 返回 `ctx.Err()`；defer 中 `discardActivationEpoch` + `transitionIfEpoch(Loading,Pending)` | 改写：Go 回 **Pending**（Rust 可能 Failed），更利于重试 |
+| `dispose_async()` future 被 drop | `CancelSafeUnload` 完成 teardown；未启动 async 进 deferred（A-9） | `DisposeAsync` 的 `drainEffectsAsync` 在 ctx 取消时 park 剩余 async、sync inline、`finishUnload(target)`、deferred 存 fiber | **保留**；in-flight cleanup 丢失与 Rust 一致 |
+| `AsyncDisposer::dispose()` future 被 drop | `CancelSafeDrain` 把未启动 cleanup 放回 slot，下次重试 | `drain()` 每步检查 `ctx.Err()`，`restore(remaining)` + `state.cancel()` | **保留**（S-1） |
+| 级联 future 被 drop | 非根帧 `park_cancelled_frame`，后续 recovery（F1/F4/F5） | 无 parked；每个 dependent 自行 `unload` 并落 Pending/Disposed | **丢失** parked/recovery；取消路径可能更长 |
+| `select!`/超时取消插件工作 | `checkpoint()` 协作退出 | `ctx` + `Checkpoint()` | 一致（协作） |
+| host 丢最后一个 Fiber 句柄 | `FiberData::drop` 安全网 | `Abandon()`（显式） | 改写：丢句柄不触发 |
+
 **结论**：async 语义**必须重新定义**，但核心承诺（顺序、单次、join、未启动恢复、目标状态）可保。
 
 ### 2.6 `TypeId`/泛型 → `reflect.Type` + 泛型自由函数
@@ -135,6 +155,19 @@ Go v0 代码逐项判定；无法判定的标“待验证”，不臆测。
 | 风险 | **高**：API 形态不可改回；lane 合并丢失部分类型安全测试点 |
 | 缓解 | ①统一“key 名字是身份、类型是读写校验”的文档；②保留 `ServiceTypeMismatch`/`DuplicateService` 错误变体；③为接口服务增加约定（`Provide[T]` 存实现值，`Get[I]` 断言）；④如未来需要严格 lane，可加 `ServiceKey[T]` 的 `lane` 字段 + 包装类型，但 v0 不做；⑤写 conformance 测试覆盖 typed-nil、接口读写、类型不匹配 |
 | v0 状态 | 已实现：`service.go` `ServiceKey[T]`/`ServiceType`；`context.go` 泛型 Provide/Get/Require；`registry.go` `TypedPluginKey[T]`；`SetNamed` 类型校验。未实现：`SetRevertible` 公共 API、lane 标记 |
+
+API 形态对照：
+
+| Rust API | Go v0 API | 备注 |
+|---|---|---|
+| `ctx.get(KEY)` | `cordis.Get(ctx, key)` | 包级泛型函数（无泛型方法） |
+| `ctx.provide(KEY, Arc<T>)` | `cordis.Provide(ctx, key, value)` | 值不是 `Arc`；共享用指针 |
+| `ctx.provide_any(KEY, Arc<T>)` | 无独立 API，统一 `Provide` | lane 合并（见 §3.2 CORE-032） |
+| `ctx.set(name, value)` | `ctx.SetNamed(name, value)` | 无公开 `SetRevertible`（CORE-041 缺口） |
+| `ServiceKey::<T>::new("x")` | `NewServiceKey[T]("x")` | 运行时 `reflect.TypeFor[T]()` |
+| `PluginKey::Type(TypeId::of::<P>())` | `TypedPluginKey[P]()` | `reflect.Type` 作键 |
+| `BoxFuture`/`ctx.effect_future` | `func(ctx) error` / `EffectFuture(cleanups,label)` | 无 future body，只有已求值 cleanup |
+| `Disposer::drop` | `Disposer.Dispose()` / `Fiber.DisposeAll()` / `Fiber.Abandon()` | 显式生命周期 |
 
 **结论**：类型安全**部分保留**（编译期 key 类型 + 运行时 reflect 校验）；`*_any` 双 lane 与
 `TypeId` 精确身份属于**重新定义**。
@@ -243,6 +276,7 @@ internal hooks、config/logger/clock、replace、dispose_all、checkpoint。
 | **041** | `ctx.set_revertible` 返回 Disposer，inverse 恢复前一 entry | v0 内部 `setRevertible` 有 inverse effect，但**公共 API 只有 `SetNamed`（返回 error）**；无公开 revertible 句柄 | API 缺口；建议导出 `SetRevertible(name,value) (*Disposer,error)`（路线图 P0） |
 | **045** | 生命周期互斥基于 operation token；同线程重入允许，async 任务迁移线程后语义不变 | v0 用 **goroutine id** 识别重入；同一 goroutine 内 cleanup 自 dispose 可重入；跨 goroutine（含 async 操作迁移）一律 Busy | Go 无任务本地 token 传播；除非所有 async API 都显式传 operation handle |
 | **046** | AsyncDisposer 恢复未启动项（S-1）；fiber 取消卸载完成 teardown（A-9）；**parked cascade 帧 + F1/F4/F5 恢复** | v0 实现 S-1/A-9/self-join/偶发 in-flight 丢失；**未实现 parked 帧与 recovery**（取消卸载逐帧完成，不停摆） | Go 的取消路径可以同步/异步完成每一帧，不需要“停摆帧”；但取消时可能长时间阻塞，且没有“恢复被取消级联”的独立入口 |
+| **037** | async 插件的 inject 门只在 `refresh_async` 时重评估；sync `refresh()` **完全跳过** async fiber | v0 sync `Refresh` 不会激活 Pending async fiber（`activateByKind` 对 async 返回 false），但对 **Active 且依赖不满足的 async fiber 会执行 blocking 卸载**；Rust 是直接跳过 | 同步 `Refresh` 的“不碰 async”语义未完全保留；建议 `refreshPass` 跳过 async fiber（路线图 P0） |
 | **049** | `when_idle` recovery-aware，等待期间恢复 parked 帧；排除调用线程自己的注册（ThreadId） | v0 `IsIdle` 严格 + `WhenIdleContext` 排除**当前 goroutine** 的注册；无 recovery 循环（无 parked 帧） | 无 parked 帧 → 无需 recovery；ThreadId→goid；两线程互等注册窗口仍可死锁（与 Rust 相同未检测） |
 | **020** | waterfall middleware panic 记录后重抛；sync terminal 的 panic 不在 catch_unwind 内但仍上抛 | v0 行为一致；sync terminal 同样未包日志 | 非语义差异，仅日志细节；测试不要断言“terminal panic 被记录” |
 | **021** | 9 个 internal hook + raw `InternalBus` 非 fiber-owned | v0 已实现 9 个 + lifecycle；raw bus 所有权一致 | 细节无差异；内部 hook panic 的 fallback 正在并行修正，测试以最终代码为准 |
