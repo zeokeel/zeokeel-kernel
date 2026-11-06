@@ -532,7 +532,7 @@ CI/`-race` 矩阵均已落地。
 | **P2** | supervision 打包 | 始终开启 | 可选 `l2` 子包/build tag + 两套 CI |
 | **P2** | parallel async 限流 | 每 listener 一 goroutine | 可选 worker pool/上限，避免 goroutine 爆炸 |
 | **P2** | logger ring buffer | 每记录 O(buffer) 拷贝 | head/size 环形索引 |
-| **P0（已完成原型）** | 编译期模块注册表 | `module/` 包：typed 清单、预检（缺失/重复/类型/环/坏配置）、provider-first 调度、required/optional 失败策略与回滚、稳定 entry ID、reload/locate、清单运行时校验；23 个测试（含 Update/Reload 状态保持） | 硬化 API + `ExtensionPoint[T]` + 产品装配 CI 模板（详见 [COMPILE-TIME-REGISTRY.md](COMPILE-TIME-REGISTRY.md)） |
+| **P0（已完成原型）** | 编译期模块注册表 | `module/` 包：typed 清单、预检（缺失/重复/类型/环/坏配置）、provider-first 调度、required/optional 失败策略与回滚、稳定 entry ID、Update/Reload/Recreate 状态语义、JSON 装配文件 + diff 热重载 + WatchFile 轮询、SafeGo/SafeCall 崩溃隔离原语、locate、清单运行时校验；34 个测试 | 硬化 API + `ExtensionPoint[T]` + 产品装配 CI 模板（详见 [COMPILE-TIME-REGISTRY.md](COMPILE-TIME-REGISTRY.md)） |
 | **P2** | 属性/redteam/blocking/benchmark | 未落地 | `property_test.go` 固定 seed、`redteam_test.go` 去重场景、`blocking_test.go`（进程级 executor）、benchmark |
 | **P2** | GC 安全网 | 无 | 评估 `runtime.AddCleanup` 仅做 orphan 兜底（非确定性，不承诺） |
 
