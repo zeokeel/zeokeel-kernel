@@ -1,0 +1,7 @@
+# Go build artifacts
+/dist/
+*.test
+*.out
+# Local scratch
+/.cache/
+/.probe/

@@ -1,0 +1,178 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+# `contents: write` is needed to attach the checksums to the GitHub release
+# after a successful crates.io publish; `actions: read` lets the workflow query
+# the CI result for the exact commit before publishing.
+permissions:
+  contents: write
+  actions: read
+
+# Never run two publishes for the same ref at once.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish to crates.io
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: require a tag (no branch publishes)
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "release workflow must be started from a v* tag, got ${GITHUB_REF_TYPE}" >&2
+            exit 1
+          fi
+      # Refuse to publish a tag whose version does not match Cargo.toml. This is
+      # the guard that catches a stale `Cargo.toml`/`Cargo.lock` at release time.
+      - name: verify tag == Cargo.toml version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml version: $version; tag: ${GITHUB_REF_NAME}"
+          if [[ "$version" != "$tag" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+        id: meta
+      # Re-running a published release must not fail at `cargo publish` with
+      # "version already exists": detect it and skip the upload, but still
+      # refresh the checksums/release asset below.
+      - name: detect an already-published version
+        id: existing
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'User-Agent: zeokeel-cordis-release-workflow' \
+            "https://crates.io/api/v1/crates/zeokeel-cordis/${version}")
+          echo "crates.io status for ${version}: ${code}"
+          case "$code" in
+            200)
+              echo "already=true" >> "$GITHUB_OUTPUT"
+              echo "::warning::zeokeel-cordis ${version} is already published on crates.io; skipping publish."
+              ;;
+            404)
+              echo "already=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # A transient API error (403/429/5xx) must not be mistaken for
+              # "not published": that would race a duplicate publish.
+              echo "cannot determine crates.io state for ${version} (HTTP ${code})" >&2
+              exit 1
+              ;;
+          esac
+      # A tag must never publish a commit whose independent CI is red or still
+      # running: this is the exact failure mode that released 0.5.1 from a
+      # commit whose CI later failed on a flaky test. The check queries the
+      # `ci.yml` results for this exact SHA and requires the latest completed
+      # run to be a success.
+      - name: require green CI for this commit
+        if: steps.existing.outputs.already != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha="${GITHUB_SHA}"
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=100")
+          conclusion=$(printf '%s' "$runs" | jq -r --arg sha "$sha" '
+            [.workflow_runs[]
+             | select(.head_sha==$sha and .status=="completed")
+             | select(.event=="push" and .head_branch=="main")]
+            | sort_by(.run_number) | last | .conclusion // "missing"')
+          echo "ci.yml latest completed run for ${sha}: ${conclusion}"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI for ${sha} is '${conclusion}', not success; push main and wait for CI to finish before tagging (see CONTRIBUTING)."
+            exit 1
+          fi
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: clippy (supervision feature)
+        run: cargo clippy --all-targets --locked --features supervision -- -D warnings
+      - name: test
+        run: cargo test --locked
+      - name: test (supervision feature)
+        run: cargo test --locked --features supervision
+      - name: doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --locked
+      # docs.rs renders with all features enabled; refuse to publish docs that
+      # only look right in the default-feature configuration.
+      - name: doc (all features)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --locked --all-features
+      - name: examples build
+        run: cargo build --examples --locked
+      # Real package build + verify (not `--list`): the staged .crate must
+      # compile on its own before anything is uploaded.
+      - name: verify package
+        run: cargo package --locked
+      # Release-time hard gates: the same guarantees CI enforces must hold for
+      # the exact commit that is about to be published.
+      - name: no unfinished markers
+        run: |
+          if grep -rn -E "(TODO|FIXME|XXX|HACK|unimplemented!|todo!)" \
+              src tests examples docs spec README.md CHANGELOG.md CONTRIBUTING.md; then
+            echo "unfinished markers found; finish or remove them" >&2
+            exit 1
+          fi
+          if grep -rn "#\[ignore" src tests; then
+            echo "ignored tests are not allowed in a release gate" >&2
+            exit 1
+          fi
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo deny (licenses, advisories, bans, sources)
+        run: cargo deny check
+      # The SBOM is part of the release evidence: generate it *before* the
+      # upload, and require byte-for-byte reproducibility.
+      - name: generate SBOM (CycloneDX, reproducible)
+        run: |
+          python3 scripts/sbom.py target/sbom-a.cdx.json
+          python3 scripts/sbom.py target/sbom-b.cdx.json
+          cmp target/sbom-a.cdx.json target/sbom-b.cdx.json
+      - name: publish dry run
+        if: steps.existing.outputs.already != 'true'
+        run: cargo publish --dry-run --locked
+      - name: publish
+        if: steps.existing.outputs.already != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
+      # Attach the checksums of the staged crate to the GitHub release
+      # (creating it if the maintainer did not). This runs on re-runs too, so a
+      # failed bookkeeping step can be repaired by re-running the workflow.
+      - name: checksums + SBOM + GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          crate="target/package/zeokeel-cordis-${version}.crate"
+          sha256sum "${crate}" | tee "${crate}.sha256"
+          cp target/sbom-a.cdx.json "target/zeokeel-cordis-${version}.cdx.json"
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --generate-notes
+          fi
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${crate}.sha256" "target/zeokeel-cordis-${version}.cdx.json" --clobber

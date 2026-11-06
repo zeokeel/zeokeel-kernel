@@ -1,0 +1,54 @@
+// Package cordis is an idiomatic Go port of the Cordis "spatiotemporal
+// composability" kernel (upstream: github.com/zeokeel/zeokeel-cordis, a pure
+// Rust crate implementing the paradigm described in *A Programming Paradigm for
+// Spatiotemporal Composability*, arXiv:2608.25512).
+//
+// The kernel owns exactly five things:
+//
+//   - contexts: scoped dependency containers with parent/child relations;
+//   - services: typed values registered into an isolation scope, with optional
+//     availability checks;
+//   - fibers: one lifecycle unit per loaded plugin, owning effects and services;
+//   - effects: registrations whose cleanup is owned by a fiber (listeners,
+//     derived services, background tasks, and child fibers);
+//   - events: synchronous and asynchronous publish/subscribe plus waterfall
+//     middleware chains crossing plugin boundaries.
+//
+// # The two composability dimensions
+//
+// Time composability: every context mutation is paired with an inverse, the
+// runtime keeps the inverses in registration order, and unloading a component
+// runs them in reverse order exactly once, restoring the state the system had
+// before the component was introduced.
+//
+// Space composability: a component declares its external dependencies (via
+// Plugin.Inject), and the runtime classifies every context change against that
+// declaration, activating and deactivating components automatically.
+//
+// Both dimensions are carried by a single Context tree, so unloading a
+// component both undoes its effects and triggers re-evaluation of everything
+// that declared a dependency on it.
+//
+// # Go-specific design notes
+//
+// The port keeps the observable contract of the Rust reference and adapts the
+// mechanisms to Go:
+//
+//   - Services are typed with generics (ServiceKey[T]); service access is
+//     provided by package-level generic functions (Provide, Get, Require, Set)
+//     because Go does not allow type parameters on methods.
+//   - Async is modeled with context.Context and goroutines instead of futures.
+//     Async lifecycle entry points accept a context.Context; cancelling that
+//     context is the Go analogue of dropping a Rust future.
+//   - Panic isolation uses recover() at every user-code boundary. The kernel
+//     never lets a plugin panic cross its boundary (the waterfall lane is the
+//     one deliberate fail-closed exception, like the Rust reference).
+//   - Ownership is GC-based. There is no deterministic destructor: callers must
+//     call Fiber.Dispose/DisposeAsync or Context.DisposeAll. Fiber.Abandon is
+//     the explicit Go analogue of dropping the last Rust handle.
+//
+// The kernel is deliberately small and dependency-free (standard library
+// only). Module loading, hot-update file watching, permissions, sandboxing,
+// timers and UI composition belong to the embedder (the host application), not
+// to this package.
+package cordis

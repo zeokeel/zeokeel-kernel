@@ -1,0 +1,59 @@
+[package]
+name = "zeokeel-cordis"
+version = "0.6.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+repository = "https://github.com/zeokeel/zeokeel-cordis"
+description = "Cordis-paradigm pluggable kernel core for Rust: context/service/fiber/effect/events/registry"
+keywords = ["cordis", "plugin", "plugin-system", "dependency-injection", "kernel"]
+categories = ["development-tools"]
+# Dev-only tooling does not belong in the published crate.
+exclude = ["deny.toml", "scripts/"]
+readme = "README.md"
+
+# 库目标名由包名推导，即 `zeokeel_cordis`：与项目名保持一致，
+# 用户侧代码统一写 `use zeokeel_cordis::...`（无需显式 [lib] 覆盖）。
+
+[package.metadata.docs.rs]
+# docs.rs 以全部 feature 构建，`supervision` 的 L2 监督 API 也会出现在在线文档中。
+all-features = true
+
+[features]
+default = []
+# Optional L2 supervision helpers (capability introspection, per-fiber quotas,
+# watchdog/heartbeat). The core kernel runs without this feature; enable it in
+# the embedder's supervisor binary.
+supervision = []
+
+# Strictest supported build configuration.
+# - panic=unwind is mandatory: panic containment is implemented with
+#   `catch_unwind` (see the compile-time guard in src/lib.rs).
+# - overflow-checks in release turns integer overflow into a panic that the
+#   kernel's containment can observe, instead of silent wrap-around.
+# - one codegen unit + thin LTO give reproducible, whole-crate optimization;
+#   raise/remove if your build time matters more than strictness.
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+overflow-checks = true
+codegen-units = 1
+lto = "thin"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+await_holding_lock = "deny"
+mutex_integer = "deny"
+
+[dependencies]
+serde_json = "1"
+tracing = { version = "0.1", features = ["log"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync"] }
+tracing-subscriber = "0.3"
