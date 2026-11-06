@@ -35,7 +35,7 @@ import (
 	"sort"
 	"sync"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // Provider describes one service contract a module provides.

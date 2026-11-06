@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 func main() {

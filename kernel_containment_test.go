@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 func fiberWithMarkers(t *testing.T, root cordis.Context, cleanup func()) *cordis.Fiber {

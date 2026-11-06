@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // waitFor polls cond until it returns true or the deadline elapses.

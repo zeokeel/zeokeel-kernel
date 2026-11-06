@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a kernel/module-layer capability or an upstream-parity feature.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What host/embedder problem does this solve? Link upstream Cordis/Rust semantics if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: API sketch, lifecycle/effect ownership, and failure semantics.
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      options:
+        - kernel (cordis root package)
+        - conformance
+        - module registry / assembly
+        - docs / tooling / CI
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project constraints
+      options:
+        - label: I understand the kernel must stay standard-library only (no new third-party dependencies).
+          required: true
+        - label: I understand in-process config hot reload is intentionally out of scope.
+          required: true

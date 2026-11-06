@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release pre-flight for the cordis-go Go module.
+# Release pre-flight for the zeokeel-kernel Go module.
 #
 # Usage: scripts/release-preflight.sh
 #
@@ -148,7 +148,14 @@ if command -v git >/dev/null 2>&1; then
 		bad "no git remote 'origin': the module path ($MODULE_PATH) is not published, so 'go get' cannot resolve it"
 	else
 		case "$remote" in
-		*"${MODULE_PATH#github.com/}"*) ok "git remote matches module path: $remote" ;;
+		*"${MODULE_PATH#github.com/}"*)
+			ok "git remote matches module path: $remote"
+			if timeout 10 git ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
+				ok "git remote is reachable"
+			else
+				warn "git remote is not reachable yet (repository not created/pushed, or network blocked)"
+			fi
+			;;
 		*) warn "git remote ($remote) does not obviously match module path ($MODULE_PATH)" ;;
 		esac
 	fi

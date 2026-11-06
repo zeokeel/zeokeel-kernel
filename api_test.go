@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // The tests in this file pin the Go 1.27 generic-method API surface: typed

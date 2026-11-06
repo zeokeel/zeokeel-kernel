@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	cordis "github.com/zeokeel/cordis-go"
-	"github.com/zeokeel/cordis-go/module"
+	cordis "github.com/zeokeel/zeokeel-kernel"
+	"github.com/zeokeel/zeokeel-kernel/module"
 )
 
 // ---------------------------------------------------------------------------

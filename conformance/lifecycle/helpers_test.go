@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // childEnv marks a re-executed child test binary. Some CORE cases depend on

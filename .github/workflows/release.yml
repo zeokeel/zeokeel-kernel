@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+
+      - name: Strict CI gate
+        run: bash scripts/ci.sh
+
+      - name: Verify release tag
+        run: |
+          set -euo pipefail
+          test -n "${GITHUB_REF_NAME:-}" || { echo "missing tag name"; exit 1; }
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*) ;;
+            *) echo "::error::release tags must look like vX.Y.Z"; exit 1 ;;
+          esac
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"

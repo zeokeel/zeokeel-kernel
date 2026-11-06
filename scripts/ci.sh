@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI entry point for cordis-go. Mirrors the local Makefile gates so a green
+# CI entry point for zeokeel-kernel. Mirrors the local Makefile gates so a green
 # `scripts/ci.sh` run means the same thing locally and in GitHub Actions.
 set -euo pipefail
 

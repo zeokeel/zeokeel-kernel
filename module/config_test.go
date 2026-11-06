@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	cordis "github.com/zeokeel/cordis-go"
-	"github.com/zeokeel/cordis-go/module"
+	cordis "github.com/zeokeel/zeokeel-kernel"
+	"github.com/zeokeel/zeokeel-kernel/module"
 )
 
 func writeConfig(t *testing.T, path string, entries []module.Entry) {

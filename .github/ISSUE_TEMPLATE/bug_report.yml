@@ -1,0 +1,55 @@
+name: Bug report
+description: Report incorrect kernel semantics, a conformance failure, or a crash.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include a minimal reproducer where possible. Security issues must not be filed here
+        (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Tag or commit SHA of zeokeel-kernel (and Go version).
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - lifecycle / fiber
+        - services / context
+        - effects / async disposal
+        - events / waterfall
+        - registry / replacement
+        - config / logger
+        - module registry / assembly
+        - docs / CI
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include panic/error output and the relevant state or log.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: Go code, test case, or command sequence. `go test` failure output is ideal.
+      render: go
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context

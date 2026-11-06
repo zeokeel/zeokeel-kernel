@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // Entry is one configured module instance in an assembly tree.

@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // newRoot creates an isolated context tree for one test and disposes it on

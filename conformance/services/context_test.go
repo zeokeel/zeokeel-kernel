@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // ---------------------------------------------------------------------------

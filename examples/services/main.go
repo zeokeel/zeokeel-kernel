@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // Clock is a service implemented here; *SystemClock satisfies it.

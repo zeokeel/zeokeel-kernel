@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // trace records cleanup/event order. The kernel may dispatch some work on

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // Greeter is a minimal synchronous plugin.

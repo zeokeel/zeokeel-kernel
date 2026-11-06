@@ -1,4 +1,4 @@
-# Go 层设计：cordis-go v0
+# Go 层设计：zeokeel-kernel v0
 
 > **定位**：三件套第三篇，说明 Go 实现的包布局、公共 API、并发/锁层级、生命周期与异步语义、
 > 与 Rust 的差异、已知简化、测试策略与 CORE→测试映射。与官方 TS Cordis 4.1.0 的**特性级对照**与
@@ -97,7 +97,7 @@ property/redteam/api_surface/blocking 专项、benchmark；`EffectFuture` 的 bo
 
 ## 2. 包与文件布局
 
-v0 是**单包** `cordis`（模块 `github.com/zeokeel/cordis-go`，Go 1.27）。文件按职责划分：
+v0 是**单包** `cordis`（模块 `github.com/zeokeel/zeokeel-kernel`，Go 1.27）。文件按职责划分：
 
 | 文件 | 职责 | 关键类型/入口 |
 |---|---|---|

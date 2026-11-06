@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zeokeel/cordis-go/module"
+	"github.com/zeokeel/zeokeel-kernel/module"
 )
 
 func TestSafeCallContainsPanic(t *testing.T) {

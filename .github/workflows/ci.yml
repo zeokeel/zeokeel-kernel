@@ -2,16 +2,23 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  ci:
-    name: Go CI
+  lint:
+    name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -22,5 +29,113 @@ jobs:
           go-version: '1.27.x'
           cache: true
 
-      - name: Run scripts/ci.sh
-        run: bash scripts/ci.sh
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . -type f -name '*.go' -not -path './.git/*' -not -path './reference/*' | sort)
+          unformatted="$(gofmt -l "${files[@]}")"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt required for:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: module hygiene
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy -diff
+          if grep -Eq '^[[:space:]]*(replace|exclude|retract)' go.mod; then
+            echo "::error::go.mod contains replace/exclude/retract directives"; exit 1
+          fi
+          external="$(go list -m all | tail -n +2)"
+          if [ -n "$external" ]; then
+            echo "::error::external module dependencies are not allowed:"; echo "$external"; exit 1
+          fi
+
+      - name: exported API documentation
+        run: go run scripts/doccheck.go
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: go test ./... -count=1
+        run: go test ./... -count=1
+
+  race:
+    name: race
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: go test -race ./... -timeout 10m
+        run: go test -race ./... -timeout 10m
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: aggregate coverage (threshold 75%)
+        run: |
+          set -euo pipefail
+          go test -count=1 ./... \
+            -coverpkg="github.com/zeokeel/zeokeel-kernel,github.com/zeokeel/zeokeel-kernel/module" \
+            -coverprofile=coverage.out
+          total="$(go tool cover -func=coverage.out | awk '/^total:/{gsub(/%/,"",$3); print $3}')"
+          echo "aggregate coverage: ${total}%"
+          awk -v c="$total" 'BEGIN{exit !(c+0 >= 75)}' || {
+            echo "::error::aggregate coverage ${total}% is below 75%"; exit 1
+          }
+
+  cross:
+    name: cross
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: cross-compile
+        run: |
+          set -euo pipefail
+          for target in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64"; do
+            set -- $target
+            echo "==> GOOS=$1 GOARCH=$2"
+            GOOS="$1" GOARCH="$2" go build ./...
+          done
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: install and run govulncheck
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

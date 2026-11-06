@@ -14,7 +14,7 @@ import (
 	"os"
 	"time"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // AsyncWorker is an asynchronous plugin.

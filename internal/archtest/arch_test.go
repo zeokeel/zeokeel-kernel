@@ -1,4 +1,4 @@
-// Package archtest_test enforces the cordis-go kernel boundary described in
+// Package archtest_test enforces the zeokeel-kernel kernel boundary described in
 // docs/analysis/04-runtime-config-logger.md §10.4.
 //
 // The kernel is a standard-library-only library: it must not grow host/IO or
@@ -37,7 +37,7 @@ const (
 	// defaultModulePath is used by the scanner self-tests. The real module
 	// path is read from go.mod so a rename cannot silently disable the
 	// self-import rule.
-	defaultModulePath = "github.com/zeokeel/cordis-go"
+	defaultModulePath = "github.com/zeokeel/zeokeel-kernel"
 
 	// stdlibListTimeout keeps the architecture test comfortably under its 2s
 	// budget even on slow machines.

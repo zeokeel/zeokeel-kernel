@@ -1,4 +1,4 @@
-# Development entry points for the cordis-go kernel.
+# Development entry points for the Zeokeel Kernel.
 #
 # The kernel must remain standard-library-only (enforced by internal/archtest),
 # so every target here relies on nothing beyond the Go toolchain.

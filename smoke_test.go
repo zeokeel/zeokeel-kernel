@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // trace collects cleanup order in tests. Tests that run sub-tests in parallel

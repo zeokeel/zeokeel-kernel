@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // LoadError aggregates runtime startup problems (a required entry that failed

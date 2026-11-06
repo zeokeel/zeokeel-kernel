@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	cordis "github.com/zeokeel/cordis-go"
+	cordis "github.com/zeokeel/zeokeel-kernel"
 )
 
 // FileConfig is the on-disk assembly configuration used at startup.
