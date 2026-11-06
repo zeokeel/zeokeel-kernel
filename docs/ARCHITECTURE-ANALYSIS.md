@@ -9,8 +9,8 @@
 > [03](analysis/03-registry-events.md) [04](analysis/04-runtime-config-logger.md)
 > [05](analysis/05-core-cases.md)；可行性 [GO-FEASIBILITY.md](GO-FEASIBILITY.md)；
 > Go 设计 [GO-DESIGN.md](GO-DESIGN.md)。Go 侧截至本稿已落地内核主体、conformance（154 测试，
-> 覆盖 51/51 CORE）+ 根包 55 个 smoke/edge 测试、archtest 与 CI；具体现状以 GO-DESIGN 的
-> “已实现/简化”清单为准。
+> 覆盖 51/51 CORE）+ 根包 56 个 smoke/edge/API 测试、archtest 与 CI；typed 服务 API 使用
+> Go 1.27 泛型方法；具体现状以 GO-DESIGN 的“已实现/简化”清单为准。
 
 ---
 
@@ -1008,7 +1008,7 @@ clippy await_holding_lock=deny/mutex_integer=deny（`Cargo.toml:36-58`）；MAX_
 | `catch_unwind` | §10.2 全部遏制点、catch_panic future poll | panic 不跨内核边界 | recover 仅同 goroutine；fatal 不可恢复 |
 | `thread_local` | ACTIVATION_FRAMES、THREAD_TOKEN/CURRENT_OP_TOKEN、DRAIN_FRAMES | 给 effect 打 epoch、生命周期重入、self-join | goroutine 身份注册表或显式 token/ctx |
 | `BoxFuture`/poll/Waker | exec.rs、unload、when_idle、Settled | 无 runtime 依赖的 async 与 join；drop=cancel | goroutine+context.Context，取消语义需重定义 |
-| `TypeId` | ServiceKey、ServiceEntry.type_id、set 校验、PluginKey::Type | 服务/插件身份与类型安全 | reflect.Type+泛型自由函数 |
+| `TypeId` | ServiceKey、ServiceEntry.type_id、set 校验、PluginKey::Type | 服务/插件身份与类型安全 | reflect.Type + Go 1.27 泛型方法（`ctx.Get[T](key)`） |
 | `&'static str` | ServiceKey name、scope label、effect label | 零拷贝、天然有界 | string；label 表可能增长 |
 | `feature gate`（supervision） | l2.rs、re-export、fiber/context/registry 方法 | 默认构建不含 L2 API | 独立包/build tag/始终开启 |
 | `panic="unwind"` guard | `src/lib.rs:48-56` | 保证遏制承诺成立 | Go 无等价物；fatal 不可 recover |
@@ -1019,7 +1019,7 @@ clippy await_holding_lock=deny/mutex_integer=deny（`Cargo.toml:36-58`）；MAX_
 显式建模；**Drop** 支撑“最后句柄释放即清理”，Go 必须把 Dispose 责任写进契约并用 Abandon+orphan 替代；
 **thread_local** 支撑“当前执行上下文”（epoch/token/drain frame），Go 必须换成显式参数或 context.Context；
 **BoxFuture+drop** 支撑取消，Go 的取消是 ctx.Done()，需显式定义未启动恢复/已启动等待或放行；
-**TypeId** 支撑服务身份，Go 用 reflect.Type，且没有泛型方法。
+**TypeId** 支撑服务身份，Go 用 reflect.Type（Go 1.27 起泛型方法可用；接口方法仍不能带类型参数）。
 
 ---
 

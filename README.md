@@ -8,7 +8,7 @@
 
 | | 状态 |
 | --- | --- |
-| 语言 | Go 1.27（仅标准库，零第三方依赖） |
+| 语言 | Go 1.27（利用 1.27 泛型方法、1.24 `weak`、1.25 `sync.WaitGroup.Go`；仅标准库，零第三方依赖） |
 | 语义基线 | 上游 Rust v0.6.0 的 `spec/CORDIS-CORE.md`（CORE-001…051） |
 | 实现方式 | 按 Go 语言特性重写（泛型、`context.Context`、goroutine、`recover`、GC），不是逐行直译 |
 | 一致性测试 | `conformance/` 目录，逐条对应 CORE 用例，`-race` 稳定 |
@@ -35,7 +35,7 @@
 | `catch_unwind` panic 遏制 | `recover`（同 goroutine） | 等价（水文流 waterfall 保持 fail-closed 重抛） |
 | `thread_local`（激活帧/操作 token/drain frame） | goroutine id 注册表 + `context.Context` 携带 drain frame | 等价到用例级（见 `runtime_goid.go` 的说明） |
 | future / `BoxFuture` / 取消=drop | `context.Context` + 阻塞函数 | 语义映射：`ctx` 取消 ≈ drop future；A-9 取消完成 teardown 可复现 |
-| `TypeId` / `?Sized` 双 lane | `reflect.Type` + 泛型 `ServiceKey[T]` + 包级泛型函数（Go 不支持泛型方法） | 等价且更简洁（Go 接口天然「unsized」） |
+| `TypeId` / `?Sized` 双 lane | `reflect.Type` + 泛型 `ServiceKey[T]` + **Go 1.27 泛型方法**（`ctx.Get[T](key)` 类型参数自动推断） | 等价且更简洁（Go 接口天然「unsized」；接口方法仍不能带类型参数，故 `Plugin` 等接口保持非泛型） |
 | feature gate（`supervision`） | 常开（记账成本是每 fiber 几个原子量） | 有意简化 |
 | `panic = "unwind"` 编译期 guard | Go 无等价（`recover` 只对同 goroutine 的 panic 有效） | 文档声明边界 |
 
@@ -129,7 +129,7 @@ go run ./examples/async_plugin
 | --- | --- |
 | Context / 作用域 | `cordis.Root()`、`ctx.Extend()`、`ctx.Isolate(name)`、`ctx.IsolateLabeled(name, label)`、`ctx.Intercept(name, config)` |
 | 插件 | `Plugin` / `AsyncPlugin` 接口；可选 `PluginKeyer`/`PluginInjector`/`PluginConfigSchema`；`ctx.Plugin(p, config)`、`cordis.PluginTyped[P]`、`ctx.PluginAsync` |
-| 服务 | `cordis.NewServiceKey[T]`、`cordis.Provide/Get/Require/ProvideChecked/ProvideGated`、`ctx.SetNamed`、`ctx.SetRevertibleNamed`、`ctx.ServiceAvailable`、`ctx.GetNamed` |
+| 服务 | `cordis.NewServiceKey[T]`、**`ctx.Provide/Get/Require/ProvideChecked/ProvideGated/ProvideService`（Go 1.27 泛型方法，类型参数自动推断）**、`ctx.SetNamed`、`ctx.SetRevertibleNamed`、`ctx.ServiceAvailable`、`ctx.GetNamed` |
 | Effect | `ctx.Effect/EffectLabeled/EffectAsync/EffectFuture/EffectStream`、`ctx.AttachEffect`、`cordis.Disposer`/`AsyncDisposer` |
 | 事件 | `ctx.On/Once/OnWithOptions/OnAsync/OnWaterfall/OnWaterfallAsync`、`ctx.Emit/Bail/ParallelAsync/SerialAsync/Waterfall` |
 | fiber 生命周期 | `Fiber.{State,Restart,RestartAsync,Update,UpdateAsync,ReplacePlugin,Dispose,DisposeAsync,Abandon,AwaitSettled,Cancel}` |
@@ -138,14 +138,20 @@ go run ./examples/async_plugin
 | 日志 / 配置 / 时钟 | `ctx.Logger()`、`ctx.LogExporter()`、`cordis.NewJsonConfigSchema()`、`ctx.ResolveConfig`、`ctx.Accessor`、`ctx.SetClock` |
 | 监督（L2） | `cordis.FiberQuota`、`registry.SetQuota`、`fiber.Heartbeat/IdleFor`、`registry.StalledFibers`、`cordis.DetectIsolationCapabilities` |
 
-Go 的硬约束：**方法不能带类型参数**，因此 typed 服务读写是包级泛型函数：
+typed 服务读写是 **Go 1.27 泛型方法**，类型参数从 `ServiceKey[T]` 自动推断，写法与 Rust 参考的
+`ctx.get(KEY)` 一致（包级泛型函数保留为便捷包装）：
 
 ```go
 key := cordis.NewServiceKey[*Config]("config")
-cordis.Provide(ctx, key, cfg)
-cfg, ok := cordis.Get(ctx, key)
-cfg, err := cordis.Require(ctx, key)
+ctx.Provide(key, cfg)             // 方法形式（推荐）
+cfg, ok := ctx.Get(key)
+cfg, err := ctx.Require(key)
+
+// 等价包装：cordis.Provide(ctx, key, cfg) / cordis.Get(ctx, key)
 ```
+
+Go 仍有的语言约束是：**接口方法不能声明类型参数**（Go 1.27 规范），因此 `Plugin`/`AsyncPlugin`
+等接口保持非泛型，typed 插件身份用 `ctx.PluginTyped(p, config)`（类型参数从参数推断）。
 
 ---
 
@@ -185,10 +191,10 @@ make ci      # check + build + test
 
 当前基线（本地实测）：
 
-- `go test ./...`：内核根包（55 个 smoke/edge 测试）+ `conformance/lifecycle`（67）、
+- `go test ./...`：内核根包（56 个 smoke/edge/API 测试）+ `conformance/lifecycle`（67）、
   `conformance/services`（36）、`conformance/runtime`（51）+ `internal/archtest`（2）全部通过
 - `go test -race ./...`：通过；并发/异步/生命周期用例 `-count=5..20` 稳定
-- 合并覆盖率 **80.7%**（`go test -coverpkg=github.com/zeokeel/cordis-go -coverprofile ... . ./conformance/...`）
+- 合并覆盖率 **约 80%**（`go test -coverpkg=github.com/zeokeel/cordis-go -coverprofile ... . ./conformance/...`）
 - `go vet ./...`、`gofmt -l` 干净；`scripts/ci.sh`（gofmt/vet/build/test/race）全绿
 - 一致性测试逐条对应 `conformance/` 下的 `TestCoreNNN_*`：**CORE-001…051 全覆盖**
   （映射表见 [`docs/GO-DESIGN.md`](docs/GO-DESIGN.md) §10）

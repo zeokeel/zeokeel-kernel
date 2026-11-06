@@ -293,27 +293,55 @@ func (c Context) SetClock(clock Clock) error {
 
 // Provide registers a typed service. The returned disposer removes it; removing
 // a service re-evaluates the fibers that injected its name.
+//
+// It is a Go 1.27 generic method: the type argument is inferred from the
+// ServiceKey and the value, so typed access reads like the Rust reference:
+//
+//	cordis.Provide(ctx, key, value) // package-level wrapper
+//	ctx.Provide(key, value)         // method form (preferred)
 func Provide[T any](c Context, key ServiceKey[T], value T) (*Disposer, error) {
+	return c.Provide(key, value)
+}
+
+// Provide registers a typed service owned by the current fiber.
+func (c Context) Provide[T any](key ServiceKey[T], value T) (*Disposer, error) {
 	return c.provideUntyped(key.Name(), value, nil, nil)
 }
 
 // ProvideChecked registers a typed service together with an availability
 // predicate (Cordis Service.check). Dependents only activate while it returns
-// true.
+// true. Package-level convenience wrapper for Context.ProvideChecked.
 func ProvideChecked[T any](c Context, key ServiceKey[T], value T, check func() bool) (*Disposer, error) {
+	return c.ProvideChecked(key, value, check)
+}
+
+// ProvideChecked is the method form of ProvideChecked.
+func (c Context) ProvideChecked[T any](key ServiceKey[T], value T, check func() bool) (*Disposer, error) {
 	return c.provideUntyped(key.Name(), value, AvailabilityCheck(check), nil)
 }
 
 // ProvideGated registers a typed service gated by a ServiceGate. Flipping the
-// gate re-evaluates the context's dependents automatically.
+// gate re-evaluates the context's dependents automatically. Package-level
+// convenience wrapper for Context.ProvideGated.
 func ProvideGated[T any](c Context, key ServiceKey[T], value T, gate *ServiceGate) (*Disposer, error) {
+	return c.ProvideGated(key, value, gate)
+}
+
+// ProvideGated is the method form of ProvideGated.
+func (c Context) ProvideGated[T any](key ServiceKey[T], value T, gate *ServiceGate) (*Disposer, error) {
 	gate.watch(c)
 	return c.provideUntyped(key.Name(), value, gate.Check(), nil)
 }
 
 // ProvideWithSchema registers a typed service with a config schema (normally
-// done through ProvideService).
+// done through ProvideService). Package-level convenience wrapper for
+// Context.ProvideWithSchema.
 func ProvideWithSchema[T any](c Context, key ServiceKey[T], value T, schema ConfigSchema) (*Disposer, error) {
+	return c.ProvideWithSchema(key, value, schema)
+}
+
+// ProvideWithSchema is the method form of ProvideWithSchema.
+func (c Context) ProvideWithSchema[T any](key ServiceKey[T], value T, schema ConfigSchema) (*Disposer, error) {
 	return c.provideUntyped(key.Name(), value, nil, schema)
 }
 
@@ -372,7 +400,17 @@ func (c Context) provideUntyped(name string, value ServiceValue, check Availabil
 
 // Get performs a typed service lookup (non-strict read lane: accessors are
 // resolved first and a service provided by a still-loading fiber is visible).
+//
+// Package-level convenience wrapper for Context.Get; the method form is
+// preferred on Go 1.27+ because the type argument is inferred:
+//
+//	if cfg, ok := ctx.Get(configKey); ok { ... }
 func Get[T any](c Context, key ServiceKey[T]) (T, bool) {
+	return c.Get(key)
+}
+
+// Get is the method form of the typed service lookup.
+func (c Context) Get[T any](key ServiceKey[T]) (T, bool) {
 	var zero T
 	if c.inner == nil {
 		return zero, false
@@ -400,9 +438,15 @@ func Get[T any](c Context, key ServiceKey[T]) (T, bool) {
 	return typed, ok
 }
 
-// Require is Get with an UnknownService error.
+// Require is Get with an UnknownService error. Package-level convenience
+// wrapper for Context.Require.
 func Require[T any](c Context, key ServiceKey[T]) (T, error) {
-	value, ok := Get(c, key)
+	return c.Require(key)
+}
+
+// Require is the method form of the typed lookup with an UnknownService error.
+func (c Context) Require[T any](key ServiceKey[T]) (T, error) {
+	value, ok := c.Get(key)
 	if !ok {
 		var zero T
 		return zero, UnknownServiceError(key.Name())
@@ -691,7 +735,13 @@ func (c Context) registerAccessor(name string, accessor Accessor) (*Disposer, er
 }
 
 // Meta reads typed metadata from this context and its ancestors.
+// Package-level convenience wrapper for Context.Meta.
 func Meta[T any](c Context, key string) (T, bool) {
+	return c.Meta[T](key)
+}
+
+// Meta is the method form of typed metadata lookup.
+func (c Context) Meta[T any](key string) (T, bool) {
 	var zero T
 	value, ok := c.MetaAny(key)
 	if !ok {
@@ -872,7 +922,14 @@ func (c Context) Plugin(plugin Plugin, config Value) (*Fiber, error) {
 }
 
 // PluginTyped loads a plugin whose registry identity is its concrete type.
+// Package-level convenience wrapper for Context.PluginTyped.
 func PluginTyped[P Plugin](c Context, plugin P, config Value) (*Fiber, error) {
+	return c.PluginTyped(plugin, config)
+}
+
+// PluginTyped is the method form of the typed plugin loader: two instances of
+// the same plugin type share one registry runtime.
+func (c Context) PluginTyped[P Plugin](plugin P, config Value) (*Fiber, error) {
 	kind := pluginKind{sync: plugin}
 	return c.pluginWithKey(kind, config, TypedPluginKey[P]())
 }
@@ -886,7 +943,13 @@ func (c Context) PluginAsync(plugin AsyncPlugin, config Value) (*Fiber, error) {
 }
 
 // PluginAsyncTyped loads an async plugin identified by its concrete type.
+// Package-level convenience wrapper for Context.PluginAsyncTyped.
 func PluginAsyncTyped[P AsyncPlugin](c Context, plugin P, config Value) (*Fiber, error) {
+	return c.PluginAsyncTyped(plugin, config)
+}
+
+// PluginAsyncTyped is the method form of the typed async plugin loader.
+func (c Context) PluginAsyncTyped[P AsyncPlugin](plugin P, config Value) (*Fiber, error) {
 	kind := pluginKind{async: plugin}
 	return c.pluginWithKey(kind, config, TypedPluginKey[P]())
 }

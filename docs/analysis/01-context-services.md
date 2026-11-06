@@ -26,7 +26,7 @@
 - 所有**用户回调都刻意放在 service_store 锁外**（可用性检查、accessor、internal hooks、schema merge）；
   重入由 `internal/get` 全局 latch 与 refresh 的 `refresh_depth` CAS latch 兜底（`internal.rs:52-55, 703-726`，`registry.rs:2094-2104`）。
 - Rust 专有机制集中在 Arc/Weak、`TypeId`、`&'static str`、`catch_unwind`、`thread_local` 激活帧、
-  `Disposer` 的 `Drop` 安全网；Go 无泛型方法、无 Drop、无 thread_local，这四点是本轮移植的主要风险（§6、§7）。
+  `Disposer` 的 `Drop` 安全网；Go 无 Drop、无 thread_local（注：本轮实现使用 Go 1.27，泛型方法已可用，早稿的“Go 无泛型方法”结论已过时），这两点是移植的主要风险（§6、§7）。
 
 ---
 
@@ -188,11 +188,15 @@ impl<T: ?Sized + Send + Sync + 'static> ServiceKey<T> {
 - 同一名字用 `ServiceKey<A>` 与 `ServiceKey<B>` 是“同一个服务槽、两个类型期望”：读错类型得到 `None`，写错类型得到 `ServiceTypeMismatch`；
   注册重复只看 `(scope,name)` → `DuplicateService`。
 - `ServiceKey` 按值传参（Copy）。名字是 `&'static str`，进程级稳定。
-- **Go 提示**：Go **不支持方法级类型参数**，所以 typed API 不能做成 `ctx.Get[T](key)`。建议：
-  - `type ServiceKey[T any] struct { name string; typ reflect.Type }` + `func NewServiceKey[T any](name string) ServiceKey[T]`；
-  - 包级泛型函数 `Provide[T any](ctx *Context, key ServiceKey[T], v *T) (Disposer, error)`、`Get/Require/ProvideChecked/ProvideGated/Set` 同理；
-  - untyped lane 用普通方法（`GetNamed(name) (any, bool)`、`Set(name string, v any) error`）；
-  - `T` 为接口时用 `reflect.TypeOf((*T)(nil)).Elem()` 得到接口类型作为 type token（Go 反射可直接比较接口类型）。
+- **Go 提示**（按 Go 1.27 更新）：Go 1.27 起支持**泛型方法**，typed API 可以做成
+  `ctx.Get[T](key)` / `ctx.Provide[T](key, v)`（类型参数由实参推断）。建议：
+  - `type ServiceKey[T any] struct { name string }` + `func NewServiceKey[T any](name string) ServiceKey[T]`；
+  - **方法形式为主**：`func (c Context) Provide[T any](key ServiceKey[T], v T) (Disposer, error)`、
+    `Get/Require/ProvideChecked/ProvideGated/ProvideService/PluginTyped/Meta` 同理；包级泛型函数作包装；
+  - 接口方法仍不能声明类型参数（Go 1.27 规范）→ `Plugin`/`AsyncPlugin` 接口保持非泛型，typed 插件身份用
+    `ctx.PluginTyped[P](p, cfg)` 泛型方法；
+  - untyped lane 用普通方法（`GetNamed(name) (any, bool)`、`SetNamed(name string, v any) error`）；
+  - `T` 为接口时用 `reflect.TypeFor[T]()` 得到接口类型作为 type token（Go 反射可直接比较接口类型）。
 
 ### 2.2 ServiceValue 与 typed/untyped 双 lane
 
@@ -564,7 +568,7 @@ CORE-025（accessor/meta）、CORE-032（unsized lane）、CORE-041（revertible
 |---|---|---|---|
 | `Arc` / `Arc::clone` 共享句柄 | Context/Store/Events/Registry/Schema/accessor/check | 直接用指针 + GC；共享字段放 `*treeCore`；不要复制 | 低 |
 | `Weak` 打破环 + 判存活 | 根 fiber `FiberLink::Weak`（`fiber.rs:127-146`）、`ServiceEntry.provider`、`ServiceGate.watchers`、disposer 捕获 weak Context（`context.rs:525`、`reflect.rs:167`） | Go GC 能收环；但“存活感知/不复活”要显式化：provider 存 `*Fiber` 且判 State；watcher/disposer 存带 `closed/live` 标志的引用或 `runtime.AddCleanup` | **中高**：Rust 的 weak→None 被当作 fail-open（`provider_is_active` 返回 true），Go 没有 weak 语义，需明确“已释放 = 不可见还是 fail-open” |
-| `TypeId` | `ServiceKey<T>` 类型槽、`ServiceEntry.type_id`、`ctx.set` 校验（`service.rs:58-60`） | `reflect.Type`（可比较/可 hash）；typed lane 存 `*T`，any lane 包一层以区分 lane；接口类型用 `reflect.TypeOf((*I)(nil)).Elem()` | **高**：Go 无泛型方法，API 形态必须改；typed-nil、指针/值类型差异、跨包同名类型 |
+| `TypeId` | `ServiceKey<T>` 类型槽、`ServiceEntry.type_id`、`ctx.set` 校验（`service.rs:58-60`） | `reflect.Type`（可比较/可 hash）；typed lane 存 `*T`，any lane 包一层以区分 lane；接口类型用 `reflect.TypeOf((*I)(nil)).Elem()` | **中**：Go 1.27 支持泛型方法，typed API 可写成 `ctx.Get[T](key)`；接口方法仍不能带类型参数；typed-nil、指针/值类型差异、跨包同名类型 |
 | `thread_local!` 激活帧 | `fiber.rs:1810-1857`：`ACTIVATION_FRAMES: RefCell<Vec<(fiber_id,epoch)>>`，给 effect 打“当前尝试 epoch”（FIX-5）；`async_effects.rs:80` 同类 | Go 无 goroutine-local；把 epoch 作为显式参数穿过 activation/effect 注册 API（或放在 `context.Context` value 里随调用链传递）；不要用 goroutine id hack | **高**：影响 effect 归属/回滚精确性，是 fiber 层接口设计的关键输入 |
 | `catch_unwind` + `AssertUnwindSafe` | 本层全部 containment 点（§5.2） | `defer func(){ if r:=recover(); ... }()` 包每个用户回调；**只对同 goroutine 有效**；不要跨 goroutine 依赖 recover | 中：Go panic 跨 goroutine 直接进程崩溃；契约上用户回调必须同步调用 |
 | `Disposer` + `Drop` 安全网 | `effect.rs:22-86`：single-shot cleanup，`Drop` 时若强引用唯一则执行 | `Disposer{ once sync.Once; cleanups []func() }` + `Dispose()`；GC 安全网用 `runtime.AddCleanup`（Go 1.24+）或显式要求 Dispose；**不能依赖 GC 做顺序清理** | **高**：Rust `Drop` 可保证“最后一个句柄释放即清理”，Go 没有确定性析构；需把“谁负责 Dispose”写进 API 契约 |
@@ -590,7 +594,7 @@ CORE-025（accessor/meta）、CORE-032（unsized lane）、CORE-041（revertible
 
 ### 7.2 Top 风险（按严重度）
 
-1. **typed API 形态**（无泛型方法）：必须用“`ServiceKey[T]` + 泛型自由函数”或“非泛型方法 + 反射断言”。这是公共 API 的第一决策，影响所有下游代码。
+1. **typed API 形态**：Go 1.27 起可用泛型方法 → `ServiceKey[T]` + `ctx.Get[T](key)`/`ctx.Provide[T]`（类型参数推断），包级自由函数作包装。接口方法不能带类型参数，故 Plugin 等接口保持非泛型。
 2. **确定性清理**：Rust 用 `Drop`/effect 逆序保证卸载即清理；Go 只有显式 Dispose + GC。必须把 dispose 责任、幂等、逆序、失败策略写进契约。
 3. **panic 遏制**：Go recover 仅同 goroutine；且 Rust 的 fallback 语义各 hook 不同（get/set/config/update “继续”，check “false”，accessor “absent”）。必须逐个复刻并写 conformance 测试。
 4. **锁外用户代码**：Go `sync.Mutex` 不可重入且无中毒兜底；一旦在 store 锁内调用 check/accessor/hook 就会自死锁。Rust 的“clone entry 出锁再判定”模式必须照抄。
@@ -789,7 +793,7 @@ pub struct SystemClock;                                                         
 
 ## 10. 与 Go 实现对齐的检查清单（交付给 Lead/实现者）
 
-1. 先定 typed lane API 形态（`ServiceKey[T]` + 泛型自由函数 vs 反射断言），再写 `Context` 骨架。
+1. 先定 typed lane API 形态（`ServiceKey[T]` + Go 1.27 泛型方法，包级自由函数作包装），再写 `Context` 骨架。
 2. `treeCore` 共享（events/registry/logger/store/clock）+ 每节点 `isolate/intercepts/accessors/meta` 复制（§1.4）。
 3. `ServiceEntry` 双 lane + `Type`/反射校验 + owner/version/withdrawn/provider 状态；三组查询谓词分开实现：
    `lookup`（非严格）、`lookupForInjection`（严格）、accessor（只读 lane）。

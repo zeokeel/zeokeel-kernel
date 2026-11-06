@@ -34,9 +34,12 @@
 // The port keeps the observable contract of the Rust reference and adapts the
 // mechanisms to Go:
 //
-//   - Services are typed with generics (ServiceKey[T]); service access is
-//     provided by package-level generic functions (Provide, Get, Require, Set)
-//     because Go does not allow type parameters on methods.
+//   - Services are typed with generics (ServiceKey[T]) and Go 1.27 generic
+//     methods: the type argument is inferred from the key, so typed access reads
+//     as ctx.Provide(key, value), ctx.Get(key) and ctx.Require(key). Package-level
+//     wrappers (cordis.Get, cordis.Provide, ...) remain for convenience. Interface
+//     methods still cannot declare type parameters, so interfaces such as Plugin
+//     stay non-generic; typed plugin identity uses Context.PluginTyped.
 //   - Async is modeled with context.Context and goroutines instead of futures.
 //     Async lifecycle entry points accept a context.Context; cancelling that
 //     context is the Go analogue of dropping a Rust future.

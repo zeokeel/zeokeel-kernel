@@ -6,10 +6,10 @@
 > [ARCHITECTURE-ANALYSIS.md](ARCHITECTURE-ANALYSIS.md)，逐用例断言见
 > [05-core-cases](analysis/05-core-cases.md)。
 >
-> **状态快照（2026-11-06 14:20，工作区最终状态）**：内核主体、`conformance/`（154 个测试，
-> 覆盖 51/51 CORE）、根包 smoke/edge 测试（55 个）、`internal/archtest`（2 个）、`examples/`（4 个）、
-> CI/Makefile 全部落地；`go test -race ./...` 与 `scripts/ci.sh` 全绿，合并覆盖率 80.7%
-> （`-coverpkg` 汇总）。
+> **状态快照（2026-11-06 14:30，工作区最终状态 / Go 1.27.3）**：内核主体、`conformance/`（154 个测试，
+> 覆盖 51/51 CORE）、根包 smoke/edge/API 测试（56 个）、`internal/archtest`（2 个）、`examples/`（4 个）、
+> CI/Makefile 全部落地；`go test -race ./...` 与 `scripts/ci.sh` 全绿，合并覆盖率约 80%
+> （`-coverpkg` 汇总）。typed 服务 API 使用 Go 1.27 泛型方法（`ctx.Get[T](key)`）。
 
 ---
 
@@ -28,9 +28,10 @@
 
 - **Context**：`Root`、`Extend`/`Isolate`/`IsolateLabeled`/`Intercept`/`ExtendMeta`、`(scope,name)`
   服务表、最近 scope 查找、无祖先回退、`ResolveConfig`（base→root→leaf→head）、`FindSchema`。
-- **Service**：泛型 `ServiceKey[T]` + `Provide/Get/Require`、`ProvideChecked/ProvideGated/
-  ProvideWithSchema`、`ProvideService`（可选 Check/Schema 接口）、`GetNamed`/`SetNamed`/
-  `SetRevertibleNamed`、`ServiceAvailable`、`Accessor`/`AccessorWithSetter`、`Meta/MetaAny`、
+- **Service**：泛型 `ServiceKey[T]` + **Go 1.27 泛型方法** `ctx.Provide/Get/Require/
+  ProvideChecked/ProvideGated/ProvideWithSchema/ProvideService/PluginTyped/PluginAsyncTyped/Meta`
+  （类型参数由实参推断；包级 `Provide/Get/...` 包装保留）、`GetNamed`/`SetNamed`/
+  `SetRevertibleNamed`、`ServiceAvailable`、`Accessor`/`AccessorWithSetter`、`MetaAny`、
   `ServiceGate`。
 - **Fiber**：六态状态机、`Dispose/DisposeAsync/Abandon`、`Restart/RestartAsync`、`Update/
   UpdateAsync`、`ReplacePlugin/ReplacePluginAsync`、`AwaitSettled(Context)`、`Cancel/Checkpoint`、
@@ -85,8 +86,10 @@ property/redteam/api_surface/blocking 专项、benchmark；`EffectFuture` 的 bo
 1. **可观察契约优先**：状态、顺序、错误变体、计数、清理次数与 Rust 对齐；不追求实现结构等价。
 2. **标准库 only**：`go.mod` 无第三方依赖；`weak`（1.24+）、`log/slog`、`reflect`、`context` 可用。
 3. **无 unsafe/cgo**：内核不 import `unsafe`、不做 `//go:linkname`；`internal/archtest` 已强制 import 边界 + 420 导出 API cap。
-4. **API 亲和 Go**：用泛型自由函数（Go 无泛型方法）、`error` 哨兵 + `errors.Is`、`context.Context`
-   作为取消/超时载体、显式 `Dispose` 作为生命周期终点。
+4. **API 亲和 Go**：用 **Go 1.27 泛型方法** 提供 typed 服务读写（`ctx.Get[T](key)`，类型参数
+   自动推断；接口方法仍不能带类型参数，故 `Plugin`/`AsyncPlugin` 等接口保持非泛型，用
+   `PluginTyped`/`PluginAsyncTyped` 泛型方法提供类型身份）、`error` 哨兵 + `errors.Is`、
+   `context.Context` 作为取消/超时载体、显式 `Dispose` 作为生命周期终点。
 5. **锁内不跑用户代码**：这是与 Rust 相同的硬约束；Go 的 Mutex 不可重入且无锁中毒，违反即自死锁。
 6. **如实标注简化**：不在文档/注释中承诺未实现的能力（尤其 Drop 语义、反向索引、parked 恢复）。
 
@@ -141,7 +144,7 @@ v0 是**单包** `cordis`（模块 `github.com/zeokeel/cordis-go`，Go 1.27）�
 |---|---|---|
 | 类型/常量 | 大驼峰；错误码 `CodeXxx` | `ServiceKey`、`CodeLifecycleBusy` |
 | 泛型 key | `NewServiceKey[T](name)`；`key.Name()` | `configKey := NewServiceKey[*Config]("config")` |
-| 注册/查询 | 包级泛型 `Provide/Get/Require`；无 `ctx.Get[T]` | `cordis.Get(root, configKey)` |
+| 注册/查询 | Go 1.27 泛型方法 `ctx.Provide/Get/Require`（推断 T）；包级包装 `cordis.*` | `root.Get(configKey)`、`root.Provide(configKey, cfg)` |
 | 生命周期 | `Dispose`/`DisposeAsync(ctx)`/`Abandon`；Fiber 方法 | `fiber.DisposeAsync(ctx)` |
 | 事件 | `On/Once/OnAsync/OnWaterfall*`；`Emit/Bail/ParallelAsync/SerialAsync/Waterfall*` | `ctx.On("demo", fn)` |
 | 异步 | 接受 `context.Context` 的入口带 `Context` 后缀或 `Async` 后缀 | `WhenIdleContext`、`DisposeAsync` |
@@ -152,10 +155,22 @@ v0 是**单包** `cordis`（模块 `github.com/zeokeel/cordis-go`，Go 1.27）�
 ```go
 type ServiceKey[T any] struct{ /* name */ }
 func NewServiceKey[T any](name string) ServiceKey[T]      // + ServiceType[T]() reflect.Type
+
+// Go 1.27 泛型方法（推荐；T 由 key/value 推断）
+func (c Context) Provide[T any](key ServiceKey[T], value T) (*Disposer, error)
+func (c Context) ProvideChecked[T any](key ServiceKey[T], value T, check func() bool) (*Disposer, error)
+func (c Context) ProvideGated[T any](key ServiceKey[T], value T, gate *ServiceGate) (*Disposer, error)
+func (c Context) ProvideWithSchema[T any](key ServiceKey[T], value T, schema ConfigSchema) (*Disposer, error)
+func (c Context) ProvideService[S Service](service S) (*Disposer, error)
+func (c Context) Get[T any](key ServiceKey[T]) (T, bool)
+func (c Context) Require[T any](key ServiceKey[T]) (T, error)
+func (c Context) PluginTyped[P Plugin](plugin P, config Value) (*Fiber, error)
+func (c Context) PluginAsyncTyped[P AsyncPlugin](plugin P, config Value) (*Fiber, error)
+func (c Context) Meta[T any](key string) (T, bool)
+
+// 包级包装（保留；适合把函数当值传递/旧代码）
 func Provide[T any](c Context, key ServiceKey[T], value T) (*Disposer, error)
-func ProvideChecked[T any](...); ProvideGated[T any](...); ProvideWithSchema[T any](...)
 func Get[T any](c Context, key ServiceKey[T]) (T, bool)
-func Require[T any](c Context, key ServiceKey[T]) (T, error)
 ```
 
 | Context 方法 | 语义 |
@@ -166,10 +181,11 @@ func Require[T any](c Context, key ServiceKey[T]) (T, error)
 | `ServiceAvailable(name) bool` | 严格注入门（provider Active） |
 | `FindSchema(name)` / `ResolveConfig(name,base,head)` | 最近 scope schema；root→leaf 合并 |
 | `Accessor(name,get)` / `AccessorWithSetter(name,get,set)` | accessor 注册（fiber-owned） |
-| `MetaAny(key)`（包级 `Meta[T]`） | 沿 parent 链读元数据 |
+| `Meta[T](key)`（Go 1.27 泛型方法；包装 `Meta[T](c,key)`）/ `MetaAny(key)` | 沿 parent 链读元数据 |
 
-`ServiceValue=any`；服务值通常是指针（共享可变状态）或接口值。`ProvideService[S Service]` 接受
-实现 `Name() string` 的对象，可选实现 `Check() AvailabilityCheck`、`ConfigSchema() ConfigSchema`。
+`ServiceValue=any`；服务值通常是指针（共享可变状态）或接口值。`ctx.ProvideService(service)`
+（Go 1.27 泛型方法，包装 `ProvideService(c, service)`）接受实现 `Name() string` 的对象，可选实现
+`Check() AvailabilityCheck`、`ConfigSchema() ConfigSchema`。
 
 ### 3.3 Context API
 
@@ -482,7 +498,7 @@ Go 没有 reactor 线程 park 死锁的同一问题，因此默认 inline 是合
 | 8 | 迭代级联 | 显式 DFS 栈，O(1) 调用栈 | dependent 两阶段迭代；ownership 子树递归 | L1（结构） |
 | 9 | FiberSlots | tombstone + positions，O(1) 删除 | slice 线性删除 | L1（性能） |
 | 10 | 双 lane | sized/any + `ArcWrap` TypeId | `any` 合并；无 lane 标记 | L2 |
-| 11 | TypeId/泛型 | 泛型方法 + TypeId | 泛型自由函数 + reflect.Type | L2 |
+| 11 | TypeId/泛型 | 泛型方法 + TypeId | Go 1.27 泛型方法 + reflect.Type；接口方法不能带类型参数（用可选接口/泛型方法桥接） | L1 |
 | 12 | 生命周期 token | thread/task-local + op token | goid token 栈；async 迁移 goroutine 丢失重入 | L2 |
 | 13 | activation epoch | 嵌套 frame 栈 + 每 poll 安装 | fiber `activatingEpoch` 字段（近似） | L1/L2 |
 | 14 | `when_idle` | recovery-aware；ThreadId 排除自身注册 | 无 recovery；goid 排除自身注册 | L2 |
@@ -526,8 +542,9 @@ CI/`-race` 矩阵均已落地。
 ### 9.1 现状
 
 - `conformance/`（154 测试，3 包，只依赖公共 API）：`TestCoreNNN_*` 覆盖 51/51 CORE。
-- `smoke_test.go`（12 个）覆盖主路径；`kernel_edge_test.go`（15 个）覆盖 LifecycleBusy/重入、replace、
-  when_idle 窗口、AsyncDisposer 取消等边缘。
+- 根包 56 个：`smoke_test.go`（12，主路径）、`kernel_edge_test.go`（15，LifecycleBusy/重入、replace、
+  when_idle 窗口、AsyncDisposer 取消等边缘）、`kernel_containment_test.go`（28，panic 遏制/级联/深度上限/
+  dispose-during-apply 等攻击面）、`api_test.go`（1，Go 1.27 泛型方法 API 形态与类型推断）。
 - `internal/archtest`（2 个）：内核 import 边界（标准库白名单、禁 IO/网络/业务词/自引用）+ 420 导出
   API cap + 扫描器自测；`examples/` 4 个骨架；CI 跑 gofmt/vet/build/test/`-race`。
 - **缺口**：property/redteam/api_surface/blocking 专项；benchmark。
@@ -563,6 +580,8 @@ conformance/services/    context_test(003/025/040)  registry_test(022/048)
 - **panic**：断言 drain 后重抛**同一个** recover 值（不包装）；waterfall 断言 re-panic。
 - **架构测试**：`internal/archtest` 已实现 import 黑名单、标准库判定、导出自引用、420 API cap 与
   bypass 自测；不依赖 `go/types` 的完整 AST 分析（可按需扩展）。
+- **Go 版本特性**：Go 1.27 泛型方法（typed API）、Go 1.25 `sync.WaitGroup.Go`（并发 listener）、
+  Go 1.24 `weak.Pointer`（弱句柄）已采用；`testing/synctest` 作为后续异步测试确定性方案评估中。
 
 ---
 
@@ -634,7 +653,8 @@ conformance/services/    context_test(003/025/040)  registry_test(022/048)
 ## 11. 结论
 
 v0 用约 8.1k 行 Go + 7.5k 行 conformance 实现了 Rust 内核的全部**组合原语**与大多数可观察语义；
-主要简化集中在**确定性析构、Weak 存活、thread-local 执行帧、future drop 取消、TypeId/泛型**五处，
+主要简化集中在**确定性析构、Weak 存活、thread-local 执行帧、future drop 取消、TypeId/类型系统**五处
+（Go 1.27 泛型方法已消除 typed API 形态差异，仅剩接口方法限制与 lane 合并），
 以及**refresh 索引快路径/parked recovery/FiberSlots** 三项性能/边界设施；均有显式替代或 N/A 标注。
 下一步优先补剩余专项测试（property/redteam/blocking/bench）与显式 Refresh 候选过滤，再按需引入
 P1 refresh 索引/ownership 显式栈；保持“代码现状 ↔ 文档承诺 ↔ 测试断言”三者一致。

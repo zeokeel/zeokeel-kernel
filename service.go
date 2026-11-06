@@ -20,12 +20,18 @@ type ServiceValue = any
 // Get/Provide type-safe at compile time (the kernel still verifies the stored
 // value's dynamic type for Set writes, DESIGN I5).
 //
-// Because Go does not allow type parameters on methods, service access is
-// provided by package-level generic functions:
+// Go 1.27 supports generic methods, so typed service access is a method on
+// Context with the type argument inferred from the key (the package-level
+// wrappers are kept as convenience):
 //
 //	key := cordis.NewServiceKey[*Config]("config")
-//	cordis.Provide(ctx, key, cfg)
-//	got, ok := cordis.Get(ctx, key)
+//	ctx.Provide(key, cfg)         // method form (preferred)
+//	cordis.Provide(ctx, key, cfg) // package-level wrapper
+//	cfg, ok := ctx.Get(key)
+//	cfg, err := ctx.Require(key)
+//
+// Only interface methods are still forbidden from declaring type parameters,
+// which is why interfaces such as Plugin stay non-generic.
 type ServiceKey[T any] struct {
 	name string
 }
@@ -309,12 +315,19 @@ type ServiceSchemaProvider interface {
 }
 
 // ProvideService registers a Service instance in c under its Name.
+// Package-level convenience wrapper for Context.ProvideService.
 //
 // The returned disposer removes the registration; the registration is owned by
 // the current fiber, so it unloads with the plugin that provided it. It returns
 // a DuplicateService error when the name is already provided in the same
 // isolation scope.
 func ProvideService[S Service](c Context, service S) (*Disposer, error) {
+	return c.ProvideService(service)
+}
+
+// ProvideService is the method form of the Service registration helper
+// (Go 1.27 generic method: S is inferred from the argument).
+func (c Context) ProvideService[S Service](service S) (*Disposer, error) {
 	name := contained("cordis::service", "Service.Name()", "<panicked service>", service.Name)
 	var check AvailabilityCheck
 	if checker, ok := any(service).(ServiceChecker); ok {

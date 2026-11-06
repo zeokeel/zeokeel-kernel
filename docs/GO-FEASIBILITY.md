@@ -4,16 +4,18 @@
 > inject 门、版本触发的重激活、逆序单次清理、六态生命周期、`LifecycleBusy`、级联卸载、双 lane
 > 事件、waterfall、panic 遏制、quiescence——但**不能逐行等价**：
 > Rust 的 `Drop` 确定性、`Weak` 存活语义、`thread_local` 执行帧、future drop 取消、`TypeId`/
-> 泛型方法这五处必须重新定义；`CORE-033/045/046/049` 等用例需要改写断言或标记 N/A。
+> 类型系统这五处需要重新定义或替换；其中 **Go 1.27 的泛型方法**消除了 API 形态差异
+> （`ctx.Get[T](key)` 直接可用），仅剩 `reflect.Type` 身份与 lane 合并两处语义差。
+> `CORE-033/045/046/049` 等用例需要改写断言或标记 N/A。
 >
 > 本文逐项评估语言机制、CORE 可复现性、性能与风险，作为 [GO-DESIGN.md](GO-DESIGN.md) 的决策依据；
 > Rust 侧背景见 [ARCHITECTURE-ANALYSIS.md](ARCHITECTURE-ANALYSIS.md)，逐用例见
 > [05-core-cases](analysis/05-core-cases.md)。
 >
-> **快照**：2026-11-06 14:05，Go 工作区（HEAD `401c55f` + 并行成员改动）。当前已落地内核主体、
-> `conformance/`（154 个测试，覆盖 51/51 CORE）、`internal/archtest`、`examples/` 与 CI；
-> `context.go` 等仍在并行收尾。行号不用于 Go（会漂移），一律引用文件与符号；Rust 行号相对
-> `reference/zeokeel-cordis-rust/`。
+> **快照**：2026-11-06 14:30，Go 工作区最终状态（Go 1.27.3）。当前已落地内核主体、
+> `conformance/`（154 个测试，覆盖 51/51 CORE）+ 根包 56 个 smoke/edge/API 测试、
+> `internal/archtest`、`examples/` 与 CI，`go test -race ./...` 全绿。
+> 行号不用于 Go（会漂移），一律引用文件与符号；Rust 行号相对 `reference/zeokeel-cordis-rust/`。
 
 ---
 
@@ -155,23 +157,23 @@ Go v0 代码逐项判定；无法判定的标“待验证”，不臆测。
 
 **结论**：async 语义**必须重新定义**，但核心承诺（顺序、单次、join、未启动恢复、目标状态）可保。
 
-### 2.6 `TypeId`/泛型 → `reflect.Type` + 泛型自由函数
+### 2.6 `TypeId`/泛型 → `reflect.Type` + Go 1.27 泛型方法
 
 | 项 | 内容 |
 |---|---|
 | Rust 机制 | `ServiceKey<T>` 携带 `PhantomData`，`TypeId` 校验写入（`src/service.rs:152-176`）；`PluginKey::Type(TypeId)`（`src/registry.rs:120-128`）；方法可带泛型参数 `ctx.get<T>(key)` |
-| Go 等价 | `ServiceKey[T any]{name string}` + **包级泛型函数** `Provide[T]/Get[T]/Require[T]`；类型身份用 `reflect.TypeFor[T]()`，服务条目存 `reflect.TypeOf(value)`；`PluginKey` 为 `{kind, name, reflect.Type}`；`TypedPluginKey[T]()` |
-| 语义差异 | ①**Go 不允许泛型方法**，所以 API 从 `ctx.Get[T](key)` 变为 `cordis.Get(ctx,key)`——这是公共 API 的第一硬约束；②`reflect.TypeOf(value)` 是**动态类型**，接口类型 key 与实现类型值的关系需约定（v0 用值断言而非 key 类型校验）；③typed-nil 陷阱：`any((*T)(nil)) != nil`，但 `reflect.TypeOf(nil)==nil`；④v0 **合并了 sized/any 两条 lane**（Go 的 any 天然存接口值），因此 Rust 的 `ArcWrap` 身份规则、跨 lane 读写失败（CORE-032、fix13 typed-vs-any）**无法原样复现**；⑤`Set` 用 `reflect.TypeOf(value) == entry.typ`，比 Rust 的 `TypeId` 宽松（接口值可存实现类型） |
-| 风险 | **高**：API 形态不可改回；lane 合并丢失部分类型安全测试点 |
-| 缓解 | ①统一“key 名字是身份、类型是读写校验”的文档；②保留 `ServiceTypeMismatch`/`DuplicateService` 错误变体；③为接口服务增加约定（`Provide[T]` 存实现值，`Get[I]` 断言）；④如未来需要严格 lane，可加 `ServiceKey[T]` 的 `lane` 字段 + 包装类型，但 v0 不做；⑤写 conformance 测试覆盖 typed-nil、接口读写、类型不匹配 |
-| v0 状态 | 已实现：`service.go` `ServiceKey[T]`/`ServiceType`；`context.go` 泛型 Provide/Get/Require；`registry.go` `TypedPluginKey[T]`；`SetNamed` 类型校验。未实现：`SetRevertible` 公共 API、lane 标记 |
+| Go 等价 | `ServiceKey[T any]{name string}` + **Go 1.27 泛型方法**：`ctx.Provide[T]` / `ctx.Get[T]` / `ctx.Require[T]`（类型参数由实参推断），包装函数 `cordis.Provide/Get/Require` 保留；类型身份用 `reflect.TypeFor[T]()`，服务条目存 `reflect.TypeOf(value)`；`PluginKey` 为 `{kind, name, reflect.Type}`；`TypedPluginKey[T]()` + `ctx.PluginTyped[P]` |
+| 语义差异 | ①**Go 1.27 已支持泛型方法**：`ctx.Get(key)` 与 Rust `ctx.get(KEY)` 形态一致；但**接口方法不能声明类型参数**（Go 1.27 规范），所以 `Plugin`/`AsyncPlugin`/`Service` 等接口仍保持非泛型，typed 身份通过泛型方法/自由函数桥接；②`reflect.TypeOf(value)` 是**动态类型**，接口类型 key 与实现类型值的关系需约定（v0 用值断言而非 key 类型校验）；③typed-nil 陷阱：`any((*T)(nil)) != nil`，但 `reflect.TypeOf(nil)==nil`；④v0 **合并了 sized/any 两条 lane**（Go 的 any 天然存接口值），因此 Rust 的 `ArcWrap` 身份规则、跨 lane 读写失败（CORE-032、fix13 typed-vs-any）**无法原样复现**；⑤`Set` 用 `reflect.TypeOf(value) == entry.typ`，比 Rust 的 `TypeId` 宽松（接口值可存实现类型） |
+| 风险 | 中：接口方法泛型限制带来少量桥接 API；lane 合并丢失部分类型安全测试点 |
+| 缓解 | ①统一“key 名字是身份、类型是读写校验”的文档；②保留 `ServiceTypeMismatch`/`DuplicateService` 错误变体；③为接口服务增加约定（`Provide[T]` 存实现值，`Get[I]` 断言）；④如未来需要严格 lane，可加 `ServiceKey[T]` 的 `lane` 字段 + 包装类型，但 v0 不做；⑤写 conformance 测试覆盖 typed-nil、接口读写、类型不匹配；⑥用 Go 1.27 泛型方法提供 `ctx.*` 方法形态并以 `api_test.go` 钉住 |
+| v0 状态 | 已实现：`service.go` `ServiceKey[T]`/`ServiceType`；`context.go` 泛型方法 `Provide/Get/Require/ProvideChecked/ProvideGated/ProvideService/PluginTyped/PluginAsyncTyped/Meta` + 包级包装；`registry.go` `TypedPluginKey[T]`；`SetNamed` 类型校验；`api_test.go` 验证泛型方法推断。未实现：严格 lane 标记 |
 
 API 形态对照：
 
 | Rust API | Go v0 API | 备注 |
 |---|---|---|
-| `ctx.get(KEY)` | `cordis.Get(ctx, key)` | 包级泛型函数（无泛型方法） |
-| `ctx.provide(KEY, Arc<T>)` | `cordis.Provide(ctx, key, value)` | 值不是 `Arc`；共享用指针 |
+| `ctx.get(KEY)` | `ctx.Get(key)`（包装：`cordis.Get(ctx,key)`） | Go 1.27 泛型方法，类型参数推断 |
+| `ctx.provide(KEY, Arc<T>)` | `ctx.Provide(key, value)`（包装：`cordis.Provide(ctx,key,value)`） | 值不是 `Arc`；共享用指针 |
 | `ctx.provide_any(KEY, Arc<T>)` | 无独立 API，统一 `Provide` | lane 合并（见 §3.2 CORE-032） |
 | `ctx.set(name, value)` | `ctx.SetNamed(name, value)` / `ctx.SetRevertibleNamed(name, value)` | 后者返回 inverse Disposer（CORE-041 已对齐） |
 | `ServiceKey::<T>::new("x")` | `NewServiceKey[T]("x")` | 运行时 `reflect.TypeFor[T]()` |
@@ -244,7 +246,23 @@ v0 选择始终开启，代价可忽略。
 | `OnceLock` BlockingExecutor | `sync.RWMutex` + 首次安装胜 | 等价（低） |
 | `Drop` Guard | `defer` | defer 不跨 goroutine；panic 时仍执行（低） |
 
-### 2.12 映射总表
+### 2.12 Go 语言特性利用清单（Go 1.27）
+
+本移植按 Go 1.27 的官方语言/标准库能力重新审视，实际采用情况：
+
+| Go 特性 | 版本 | 在本内核中的用法 | 状态 |
+|---|---|---|---|
+| **泛型方法** | 1.27 | typed 服务读写/插件身份/元数据是 `Context` 的泛型方法（`ctx.Provide/Get/Require/ProvideService/PluginTyped/Meta`），类型参数由实参推断；包级泛型函数保留为包装；`api_test.go` 钉住形态。接口方法仍不能带类型参数（规范限制），故 `Plugin`/`AsyncPlugin`/`Service` 接口保持非泛型 | 已采用 |
+| `sync.WaitGroup.Go` | 1.25 | `events.parallel_async` 的并发 listener 分发 | 已采用 |
+| `weak.Pointer` | 1.24 | 服务条目的 provider 弱句柄、registry 的 root fiber 弱句柄（断开 GC 环） | 已采用 |
+| `log/slog` | 1.21 | 内核诊断通道（`slog.Default()`，宿主可替换 handler）；`SlogExporter` 把服务日志桥接到 slog；Go 1.26 的 `slog.NewMultiHandler` 让宿主可组合多 handler | 已采用 |
+| `runtime.GC` + `weak` | — | CORE-033 的“dispose 后整图可回收”用 finalizer/GC 探针验证（与 Rust 结构无环是不同机制） | 已采用（测试） |
+| `testing/synctest` | 1.25 稳定 | 可对 async/listener 并发做确定性气泡测试；当前用 channel 闸门 + `-race`，未强制引入 | 待评估 |
+| `encoding/json/v2` + `jsontext` | 1.27 | `Value = any` 与 v1/v2 解码结果形状兼容；内核不绑定具体 JSON 实现，宿主可选用 v2（`jsontext.Value` 也可直接作为 `Value` 存入） | 可选，不绑定 |
+| `runtime.AddCleanup` | 1.24 | 未用于 fiber 兜底清理：dispose 后 fiber↔context↔registry 形成环，Go 对“环中含终结器对象”的回收/终结顺序无保证；确定性清理仍是显式 `Dispose`/`Abandon` 契约 | 不采用（有原因） |
+| `iter`/`slices`/`maps`/`min/max` | 1.21–1.23 | 未强依赖；内核保持朴素循环以便审计 | 未采用（可选） |
+
+### 2.13 映射总表
 
 | # | Rust 机制 | Go 方案 | 语义差异 | 风险 | 缓解 | v0 |
 |---|---|---|---|---|---|---|
@@ -253,7 +271,7 @@ v0 选择始终开启，代价可忽略。
 | 3 | catch_unwind | recover | 仅同 goroutine；fatal 不可恢复 | 中 | 每个回调入口 recover；waterfall re-panic | 已实现 |
 | 4 | thread_local | goid 注册表 + ctx frame | goid 非官方；跨 goroutine 重入丢失 | **高** | token 栈；显式 ctx；文档/测试 | 已实现（epoch 近似） |
 | 5 | async/future | goroutine + ctx | 取消语义/清理完成时机不同；无 parked 帧 | 中高 | 契约化；deferred/orphan；重试入口 | 部分实现 |
-| 6 | TypeId/泛型 | reflect.Type + 泛型自由函数 | 无泛型方法；lane 合并；typed-nil | **高** | key 名身份；类型校验；测试 | 已实现（lane 简化） |
+| 6 | TypeId/泛型 | reflect.Type + Go 1.27 泛型方法 | 接口方法不能带类型参数；lane 合并；typed-nil | 中 | key 名身份；类型校验；测试 | 已实现（lane 简化） |
 | 7 | feature gate | 始终开启/独立包 | 无编译裁剪 | 低 | 保持轻量；可选 build tag | 始终开启 |
 | 8 | panic=unwind guard | 无 | 无编译期承诺 | — | 文档+CI+L3/L4 | 无 |
 | 9 | Send+Sync | 运行时锁 + -race | 无编译期约束 | 中 | 文档；-race；快照 | 已实现 |
@@ -449,7 +467,7 @@ drain frames），不再递归；**ownership 子树**仍通过 effect cleanup �
 |---|---|---|---|---|---|
 | R1 | goid 依赖 `runtime.Stack` | 高 | 高频生命周期入口 / Go 版本变化 | 只在入口用；token 栈；可替换为显式 op handle | Lead 决定是否接受 |
 | R2 | 丢句柄不清理导致泄漏 | 高 | 用户忘记 Dispose | 文档/示例；Abandon；orphan；泄漏测试 | 契约必须写清 |
-| R3 | 无泛型方法导致 API 形态固定 | 高 | 所有下游代码 | 泛型自由函数；key 常量 | 已在 v0 定案 |
+| R3 | 接口方法不能带类型参数（Go 1.27 规范） | 低 | 需要泛型接口/插件契约的扩展 | 泛型方法（Go 1.27）+ 可选元数据接口 + 自由函数桥接；`api_test.go` 钉住形态 | 已缓解 |
 | R4 | 取消时 in-flight cleanup 丢失 | 中高 | `DisposeAsync` 取消 | 文档边界；deferred 重试；测试 | 接受（与 Rust A-9 类似） |
 | R5 | 无 parked 帧恢复 | 中 | 级联取消 | 逐帧完成；不暴露“恢复”API；文档 | 接受/后续补 |
 | R6 | 显式 refresh 仍全量扫描 | 中 | 大 fanout / 频繁 set | dependents 刷新已用 depIndex+dirty；显式 Refresh 全量（P1 可加候选过滤） | 缓解 |
@@ -465,8 +483,8 @@ drain frames），不再递归；**ownership 子树**仍通过 effect cleanup �
 1. **能做**：Go 可以承载完整内核语义；v0 已实现 Context/Service/Fiber/Effect/Events/Registry/
    Config/Logger/Clock/L2 的主体，公开契约与 Rust 高度同构。
 2. **不能 1:1 的只有 5 类**：确定性析构（Drop）、弱引用存活语义、线程局部执行帧（thread_local）、
-   future drop 取消、TypeId/泛型方法；它们分别被显式 Dispose/Abandon、显式状态、goid+ctx、
-   ctx 取消、reflect.Type+泛型自由函数替代。
+   future drop 取消、TypeId/类型系统；它们分别被显式 Dispose/Abandon、显式状态、goid+ctx、
+   ctx 取消、reflect.Type + Go 1.27 泛型方法替代（泛型方法使 typed API 与 Rust 形态一致）。
 3. **CORE 51 例中**：46 例可直接按原断言实现（conformance 已覆盖 51/51）；`033` 标记 N/A（GC 探针）；
    `045` 重定义（goid），`027/046/049` 为部分实现（EffectFuture body/parked/recovery）。
 4. **性能**：cascade 与 dependents 刷新已用 depIndex+dirty 快路径收敛；显式 refresh 全量在中小树

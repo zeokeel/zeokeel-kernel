@@ -313,13 +313,10 @@ func (e *Events) parallelAsyncScoped(ctx context.Context, name string, args []Va
 		return
 	}
 	var wg sync.WaitGroup
-	wg.Add(len(pending))
 	for _, callback := range pending {
-		callback := callback
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = callAsyncListener(ctx, name, callback, args)
-		}()
+		})
 	}
 	wg.Wait()
 }

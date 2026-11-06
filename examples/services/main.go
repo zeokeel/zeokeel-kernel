@@ -33,7 +33,7 @@ func (Reporter) Name() string { return "reporter" }
 func (Reporter) Inject() []string { return []string{ClockKey.Name()} }
 
 func (Reporter) Activate(ctx cordis.Context, _ cordis.Value) error {
-	clock, err := cordis.Require(ctx, ClockKey)
+	clock, err := ctx.Require(ClockKey)
 	if err != nil {
 		return err
 	}
@@ -69,19 +69,19 @@ func main() {
 	// The value is passed as the interface type so the generic parameter is
 	// inferred consistently from the ServiceKey.
 	var impl Clock = wallClock{}
-	if _, err := cordis.Provide(root, ClockKey, impl); err != nil {
+	if _, err := root.Provide(ClockKey, impl); err != nil {
 		report(err)
 	}
 	fmt.Println("reporter state after provide:", reporter.State())
 
 	// Read the service back with the typed lane.
-	clock, ok := cordis.Get(root, ClockKey)
+	clock, ok := root.Get(ClockKey)
 	fmt.Println("typed get:", clock.Now(), ok)
 
 	// A ServiceGate re-evaluates dependents automatically when flipped.
 	gate := cordis.NewServiceGate(false)
 	flag := 1
-	if _, err := cordis.ProvideGated(root, GateKey, &flag, gate); err != nil {
+	if _, err := root.ProvideGated(GateKey, &flag, gate); err != nil {
 		report(err)
 	}
 	gated, err := root.Plugin(GateConsumer{}, nil)
@@ -99,11 +99,11 @@ func main() {
 	// service name can be provided independently below the isolated child.
 	isolated := root.Isolate(ClockKey.Name())
 	var isolatedImpl Clock = wallClock{}
-	if _, err := cordis.Provide(isolated, ClockKey, isolatedImpl); err != nil {
+	if _, err := isolated.Provide(ClockKey, isolatedImpl); err != nil {
 		report(err)
 	}
 	fmt.Println("isolated context has its own provisioned clock:", func() bool {
-		_, ok := cordis.Get(isolated, ClockKey)
+		_, ok := isolated.Get(ClockKey)
 		return ok
 	}())
 
