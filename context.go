@@ -895,7 +895,8 @@ func (c Context) pluginWithKey(kind pluginKind, config Value, key PluginKey) (*F
 // effect and the internal/plugin broadcast).
 func (c Context) createFiber(kind pluginKind, config Value, key PluginKey) (*Fiber, error) {
 	parentFiber := c.inner.fiber
-	if parentFiber.stateSnapshot() == Disposed {
+	switch parentFiber.stateSnapshot() {
+	case Disposed, Failed, Unloading:
 		return nil, ErrDisposed
 	}
 	// Loading-depth guard counted along the fiber parent chain.

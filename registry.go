@@ -822,30 +822,16 @@ func (r *Registry) bindReplacement(old, newKey PluginKey, metadata replacementMe
 		r.runtimes[newKey] = target
 	}
 	r.mu.Unlock()
-	for _, data := range fibers {
-		target.push(data)
-	}
+	// swapPluginMetadata moves each fiber to the new runtime entry.
 	oldPlugins := make([]pluginKind, len(fibers))
 	for i, data := range fibers {
 		oldPlugins[i], _, _ = data.swapPluginMetadata(metadata, newKey)
 	}
 	return func() {
-		r.mu.Lock()
-		target.mu.Lock()
-		for _, data := range fibers {
-			target.fibers = removeFiberData(target.fibers, data.id)
-		}
-		target.mu.Unlock()
-		if target.IsEmpty() {
-			delete(r.runtimes, newKey)
-		}
-		restored := newPluginRuntime(oldName, oldKey)
-		restored.fibers = append(restored.fibers, fibers...)
-		r.runtimes[oldKey] = restored
-		r.mu.Unlock()
 		for i, data := range fibers {
 			data.restorePluginMetadata(oldPlugins[i], oldKey, oldName, oldKey)
 		}
+		r.pruneEmptyRuntimes()
 	}
 }
 

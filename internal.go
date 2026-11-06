@@ -1,6 +1,7 @@
 package cordis
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
 )
@@ -132,9 +133,13 @@ func (n *ConfigNext) Next(config Value) Value {
 	}
 	hook, rest := n.hooks[0], n.hooks[1:]
 	next := &ConfigNext{hooks: rest, fiber: n.fiber}
-	return contained("cordis::internal", "internal/config", config, func() Value {
-		return hook(n.fiber, config, next)
-	})
+	value, panicValue := callValueContained(func() Value { return hook(n.fiber, config, next) })
+	if panicValue != nil {
+		// A panicking hook is contained and falls through with the incoming
+		// value so the caller still gets a config.
+		return next.Next(config)
+	}
+	return value
 }
 
 // UpdateNext continues the internal/update waterfall.
@@ -159,14 +164,13 @@ func (n *UpdateNext) Next(config Value, noSave bool) bool {
 	}
 	hook, rest := n.hooks[0], n.hooks[1:]
 	next := &UpdateNext{hooks: rest, fiber: n.fiber, terminal: n.terminal, ran: n.ran}
-	result := contained("cordis::internal", "internal/update", true, func() bool {
-		hook(n.fiber, config, noSave, next)
-		return true
-	})
-	if result {
+	panicValue := callContained(func() { hook(n.fiber, config, noSave, next) })
+	if panicValue != nil {
 		// A panicking hook is contained and falls through with the incoming
 		// value so the terminal still commits (panic = allow, by contract).
-		if !next.ran.Load() {
+		slog.Error("internal/update hook panicked; continuing the chain",
+			"panic", panicText(panicValue))
+		if !n.ran.Load() {
 			return next.Next(config, noSave)
 		}
 	}
@@ -189,17 +193,26 @@ func (n *GetNext) Next() (ServiceValue, bool) {
 	hook, rest := n.hooks[0], n.hooks[1:]
 	next := &GetNext{hooks: rest, ctx: n.ctx, name: n.name, terminal: n.terminal}
 	type getOutcome struct {
-		value ServiceValue
-		ok    bool
+		value     ServiceValue
+		ok        bool
+		panicked  bool
 	}
-	outcome := contained("cordis::internal", "internal/get", getOutcome{}, func() getOutcome {
-		value, ok := hook(n.ctx, n.name, next)
-		return getOutcome{value: value, ok: ok}
-	})
-	if outcome.ok {
-		return outcome.value, true
+	outcome := func() getOutcome {
+		out := getOutcome{}
+		panicValue := callContained(func() {
+			out.value, out.ok = hook(n.ctx, n.name, next)
+		})
+		if panicValue != nil {
+			slog.Error("internal/get hook panicked; falling through", "panic", panicText(panicValue))
+			out.panicked = true
+		}
+		return out
+	}()
+	if outcome.panicked {
+		return next.Next()
 	}
-	return next.Next()
+	// ok=false is the "service absent" answer, not "skip this hook".
+	return outcome.value, outcome.ok
 }
 
 // SetNext continues the internal/set waterfall.
@@ -218,13 +231,13 @@ func (n *SetNext) Next() bool {
 	}
 	hook, rest := n.hooks[0], n.hooks[1:]
 	next := &SetNext{hooks: rest, ctx: n.ctx, name: n.name, value: n.value, terminal: n.terminal}
-	written := contained("cordis::internal", "internal/set", true, func() bool {
-		return hook(n.ctx, n.name, n.value, next)
-	})
-	if !written {
-		return false
+	var written bool
+	panicValue := callContained(func() { written = hook(n.ctx, n.name, n.value, next) })
+	if panicValue != nil {
+		slog.Error("internal/set hook panicked; falling through", "panic", panicText(panicValue))
+		return next.Next()
 	}
-	return next.Next()
+	return written
 }
 
 // hookList is an ordered hook list with id-based removal.

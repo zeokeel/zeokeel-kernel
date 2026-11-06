@@ -439,12 +439,22 @@ func (d *fiberData) pushEffect(effect *fiberEffect) error {
 	}
 	// Drop disposed entries so the list cannot grow unboundedly on churn.
 	live := d.effects[:0]
+	userEffects := 0
 	for _, existing := range d.effects {
 		if !existing.disposed() {
 			live = append(live, existing)
+			if !existing.internal {
+				userEffects++
+			}
 		}
 	}
 	d.effects = live
+	if !effect.internal {
+		if limit := d.registry.quotaLimits().MaxEffects; limit > 0 && userEffects >= limit {
+			d.mu.Unlock()
+			return QuotaExceededError("effects")
+		}
+	}
 	epoch := d.activatingEpoch.Load()
 	if epoch == 0 {
 		epoch = d.activationEpoch.Load()

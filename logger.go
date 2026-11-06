@@ -136,7 +136,9 @@ func NewLoggerService(level LogLevel) *LoggerService {
 // NewLoggerServiceWithBuffer creates a service with an explicit buffer capacity
 // (0 disables the buffer).
 func NewLoggerServiceWithBuffer(level LogLevel, bufferSize int) *LoggerService {
-	return &LoggerService{bufferSize: bufferSize}
+	service := &LoggerService{bufferSize: bufferSize}
+	service.level.Store(uint32(level))
+	return service
 }
 
 // Level returns the default threshold of this service.
