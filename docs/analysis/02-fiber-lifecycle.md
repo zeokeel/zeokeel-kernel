@@ -1,7 +1,7 @@
 # 02 · Fiber 生命周期、Effect 所有权与 Internal Hooks
 
-> 上游基线：`reference/zeokeel-cordis-rust`（zeokeel-cordis v0.6.0）。本文 `file:line` 引用均相对
-> `reference/zeokeel-cordis-rust/`（如 `src/fiber.rs:152`）。目标：为 Go 重实现提取 fiber 生命周期 +
+> 上游基线：GitHub [`zeokeel/zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) v0.6.0。
+> 本文 `file:line` 引用均相对上游仓库根目录（如 `src/fiber.rs:152`）。目标：为 Go 重实现提取 fiber 生命周期 +
 > effect 所有权 + internal hooks 的可移植语义；不写 Go 代码，§9.4/§9.5 给出移植含义与必须重新定义的语义。
 > 证据：`src/fiber.rs`(4347)、`src/effect.rs`(80)、`src/internal.rs`(787)、`src/async_effects.rs`(733)、
 > `src/registry.rs`(3036)、`src/context.rs`(2359)、`src/exec.rs`(234)、`spec/CORDIS-CORE.md`、

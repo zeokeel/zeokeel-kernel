@@ -1,6 +1,6 @@
 # 03 — Registry 插件运行时 / 事件总线 / Waterfall 架构与语义
 
-> 分析对象：`reference/zeokeel-cordis-rust`（zeokeel/zeokeel-cordis v0.6.0，纯 Rust 内核）。
+> 分析对象：GitHub [`zeokeel/zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) v0.6.0（纯 Rust 内核）。
 > 必读证据：`src/registry.rs`（3036 行）、`src/events.rs`（673）、`src/waterfall.rs`（229）、`spec/CORDIS-CORE.md` §2.5/§2.6/§4、`docs/CORDIS-RUST.md` §3/§4。
 > 约定：`path:line` 相对参考仓库根；叙述中文，标识符保持英文。本文只做只读分析，不含 Go 实现代码；Go 移植含义见 §8。
 > 关联任务：task-3。唯一允许写文件：本文。

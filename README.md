@@ -1,6 +1,7 @@
 # Zeokeel Kernel
 
 [![CI](https://github.com/zeokeel/zeokeel-kernel/actions/workflows/ci.yml/badge.svg)](https://github.com/zeokeel/zeokeel-kernel/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zeokeel/zeokeel-kernel)](https://github.com/zeokeel/zeokeel-kernel/releases)
 [![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go)](https://go.dev/doc/go1.27)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/zeokeel/zeokeel-kernel.svg)](https://pkg.go.dev/github.com/zeokeel/zeokeel-kernel)
@@ -9,9 +10,8 @@
 插件运行在 fiber 上，所有副作用按逆序完整撤销，依赖声明驱动插件的激活与停用。
 
 > **Zeokeel Kernel** 是 [zeokeel/zeokeel-cordis](https://github.com/zeokeel/zeokeel-cordis)
-> （Rust v0.6.0，MIT）的 Go 重实现，语义对齐 CORE-001…051；上游源码以只读参考放在
-> [`reference/zeokeel-cordis-rust/`](reference/zeokeel-cordis-rust/) 下。Go 包名保留 `cordis`
-> 以保持与上游/官方 Cordis 的语义连续性。
+> （Rust v0.6.0，MIT）的 Go 重实现，语义对齐 CORE-001…051。上游 Rust 源码不在本仓库再分发，
+> 请以 GitHub 上游仓库为准。Go 包名保留 `cordis` 以保持与上游/官方 Cordis 的语义连续性。
 >
 > 这是**内核**，不是框架：只提供组合原语与生命周期语义。模块装配、权限、沙箱、进程/WASM
 > 隔离属于使用它的宿主（embedder）；本仓库额外提供可选的编译期模块注册表 `module/`。
@@ -159,7 +159,6 @@ make preflight  # 发布预检：CI 门禁 + module 卫生 + 覆盖率 + 交叉�
 ├── examples/             # 可运行示例（hello/services/events/async_plugin）
 ├── docs/                 # 架构/可行性/设计/对照/发布与仓库配置文档
 ├── internal/archtest/    # 内核边界与导出 API 静态检查
-├── reference/            # 上游 Rust v0.6.0 只读参考（不参与 Go 构建）
 ├── scripts/              # ci.sh、release-preflight.sh、doccheck.go、setup-github.sh
 ├── .github/              # CI / release workflow、PR/issue 模板、CODEOWNERS、dependabot
 ├── Makefile  go.mod  LICENSE
@@ -206,4 +205,4 @@ GitHub Release（发布步骤见 [`docs/RELEASE-PREFLIGHT.md`](docs/RELEASE-PREF
   - [zeokeel/zeokeel-cordis](https://github.com/zeokeel/zeokeel-cordis)（Rust，MIT）；
   - 官方 [deepseek-ai/cordis](https://github.com/deepseek-ai/cordis) TypeScript 实现
     （论文 *A Programming Paradigm for Spatiotemporal Composability*）。
-- `reference/` 下的上游源码保留其原始 MIT 许可与版权声明。
+- 上游 Rust 源码不在本仓库再分发，请以 [zeokeel/zeokeel-cordis](https://github.com/zeokeel/zeokeel-cordis) 为准（MIT）。

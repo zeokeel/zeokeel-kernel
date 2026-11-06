@@ -286,5 +286,5 @@ L0 本内核          Context/scope · Service DI · Fiber 生命周期 · Effec
 
 - 官方 4.1.0 源码（npm `@deepseek-ai/cordis@4.1.0` tarball）：`src/context.ts`（Proxy/作用域）、`src/registry.ts`（Plugin 三种形态、Inject 对象形式、Runtime）、`src/fiber.ts`（状态机、effect 形态、update/commit/committed、raw/effective config）、`src/reflect.ts`（Impl/dependents/release、get/provide/set/accessor/mixin/notify/trace）、`src/events.ts`（EventOptions、10 个 internal hook：plugin/status/service/config/commit/update/get/set/listener/dispatch）、`src/service.ts`（Service 类/symbol 协议）、`src/logger.ts`（LoggerLevel ERROR=0…DEBUG=3、Message/Formatter/Exporter）、`src/utils.ts`（DisposableList/composeError/traceable）。
 - 官方生态包（npm）：`@deepseek-ai/cordis-plugin-loader@1.1.0`（EntryTree/create/update/remove/await/locate/volatile commit）、`-include`（YAML/JSON）、`-group`、`-hmr`、`-timer`；README 明确 core 与生态分层。
-- Rust 基线差异：`reference/zeokeel-cordis-rust/spec/CORDIS-CORE.md` §5、`docs/CORDIS-RUST.md` §1/§2。
+- Rust 基线差异：上游 [`zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) v0.6.0 的 `spec/CORDIS-CORE.md` §5、`docs/CORDIS-RUST.md` §1/§2。
 - 本 Go 端口现状：`docs/GO-FEASIBILITY.md`（机制映射/简化清单）、`docs/GO-DESIGN.md`（API/差异/测试策略）、`conformance/`（51/51 CORE）。

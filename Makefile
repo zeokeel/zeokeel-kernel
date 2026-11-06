@@ -6,8 +6,8 @@
 GO ?= go
 GOFMT ?= gofmt
 
-# Every Go source in the module except the Rust reference tree and VCS data.
-GO_FILES := $(shell find . -type f -name '*.go' -not -path './.git/*' -not -path './reference/*' | sort)
+# Every Go source in the module except VCS data.
+GO_FILES := $(shell find . -type f -name '*.go' -not -path './.git/*' | sort)
 
 .PHONY: all build check fmt vet test race cover ci preflight clean
 

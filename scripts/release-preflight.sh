@@ -65,7 +65,7 @@ else
 fi
 
 section "source hygiene"
-mapfile -t go_files < <(find . -type f -name '*.go' -not -path './.git/*' -not -path './reference/*' | sort)
+mapfile -t go_files < <(find . -type f -name '*.go' -not -path './.git/*' | sort)
 unformatted="$("$GOFMT" -l "${go_files[@]}" 2>/dev/null || true)"
 if [[ -z "$unformatted" ]]; then ok "gofmt: clean"; else bad "gofmt: unformatted files:"; printf '%s\n' "$unformatted" | sed 's/^/      /'; fi
 run_check "go vet ./..." "$GO" vet ./...
@@ -164,12 +164,6 @@ if command -v git >/dev/null 2>&1; then
 		warn "no semantic-version git tag yet (expected for the first release, e.g. v0.1.0)"
 	else
 		ok "latest release tag: $latest_tag"
-	fi
-	if [[ -d reference ]]; then
-		reference_kb="$(du -sk reference 2>/dev/null | awk '{print $1}')"
-		if [[ -n "$reference_kb" ]] && ((reference_kb > 1024)); then
-			warn "reference/ is ${reference_kb}KB inside the module root; Go module zips include it (consumers download it)"
-		fi
 	fi
 fi
 

@@ -1,7 +1,7 @@
 # Cordis Rust 内核架构全解
 
 > **定位**：三件套第一篇，逐层解释 Rust 上游（v0.6.0）的结构、算法、锁纪律与不变量，并给出
-> `CORE-001…051` 的实现证据。**证据约定**：`path:line` 相对 `reference/zeokeel-cordis-rust/`
+> `CORE-001…051` 的实现证据。**证据约定**：`path:line` 相对上游仓库 [`zeokeel/zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) v0.6.0 根目录
 > （如 `src/fiber.rs:1123`）；规范见 `spec/CORDIS-CORE.md`，设计意图见 `docs/DESIGN.md`，
 > 隔离承诺见 `docs/KERNEL-ISOLATION.md`。
 >

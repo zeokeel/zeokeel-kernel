@@ -15,7 +15,7 @@
 > **快照**：2026-11-06 14:30，Go 工作区最终状态（Go 1.27.3）。当前已落地内核主体、
 > `conformance/`（154 个测试，覆盖 51/51 CORE）+ 根包 56 个 smoke/edge/API 测试、
 > `internal/archtest`、`examples/` 与 CI，`go test -race ./...` 全绿。
-> 行号不用于 Go（会漂移），一律引用文件与符号；Rust 行号相对 `reference/zeokeel-cordis-rust/`。
+> 行号不用于 Go（会漂移），一律引用文件与符号；Rust 行号相对上游仓库 [`zeokeel/zeokeel-cordis`](https://github.com/zeokeel/zeokeel-cordis) v0.6.0 根目录。
 
 ---
 
