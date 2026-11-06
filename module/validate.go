@@ -17,7 +17,7 @@ import (
 // disposes the subtree through the kernel's child-ownership effect.
 type Entry struct {
 	// ID is the stable instance identity (required, unique across the tree).
-	// Reload/Locate/Instance use it; kernel fiber IDs are not stable across
+	// Locate/Instance use it; kernel fiber IDs are not stable across
 	// restarts and should not be used by the host.
 	ID string `json:"id"`
 	// Module is the registered module ID to instantiate.
@@ -52,10 +52,6 @@ type Plan struct {
 	schedule   []*resolvedEntry
 	warnings   []string
 	moduleInfo map[string]*moduleDef
-	// consumers maps a required service name to the entry IDs that inject it;
-	// providerOf maps a provided service name to its entry ID (empty = builtin).
-	consumers  map[string][]string
-	providerOf map[string]string
 }
 
 // Warnings returns non-fatal pre-flight findings (for example an optional
@@ -68,83 +64,6 @@ func (p *Plan) EntryIDs() []string {
 	out := make([]string, 0, len(p.schedule))
 	for _, entry := range p.schedule {
 		out = append(out, entry.entry.ID)
-	}
-	return out
-}
-
-// ReloadClosure returns the schedule-ordered set of entries that must be
-// recreated to reload entryID without losing dependent state: the entry subtree
-// plus every loader-managed fiber that (transitively) injects one of its provided
-// services. Dependents outside this closure would otherwise be re-activated by
-// the kernel's provider-version change and silently lose their own state.
-//
-// The closure only covers loader-managed entries; fibers created dynamically by
-// module code are outside the assembly contract.
-func (p *Plan) reloadClosure(entryID string) []*resolvedEntry {
-	root, ok := p.byID[entryID]
-	if !ok {
-		return nil
-	}
-	included := make(map[string]bool)
-	var addSubtree func(entry *resolvedEntry)
-	addSubtree = func(entry *resolvedEntry) {
-		if included[entry.entry.ID] {
-			return
-		}
-		included[entry.entry.ID] = true
-		for _, child := range entry.children {
-			addSubtree(child)
-		}
-	}
-	addSubtree(root)
-	queue := make([]string, 0, len(included))
-	for id := range included {
-		queue = append(queue, id)
-	}
-	for len(queue) > 0 {
-		id := queue[len(queue)-1]
-		queue = queue[:len(queue)-1]
-		entry := p.byID[id]
-		if entry == nil {
-			continue
-		}
-		for _, provider := range entry.def.provides {
-			for _, consumerID := range p.consumers[provider.Name] {
-				if included[consumerID] {
-					continue
-				}
-				consumer, ok := p.byID[consumerID]
-				if !ok {
-					continue
-				}
-				addSubtree(consumer)
-				queue = append(queue, consumerID)
-			}
-		}
-	}
-	out := make([]*resolvedEntry, 0, len(included))
-	for _, entry := range p.schedule {
-		if included[entry.entry.ID] {
-			out = append(out, entry)
-		}
-	}
-	return out
-}
-
-// subtreeOrder returns the schedule-ordered entries of one entry subtree.
-func (p *Plan) subtreeOrder(entryID string) []*resolvedEntry {
-	root, ok := p.byID[entryID]
-	if !ok {
-		return nil
-	}
-	var out []*resolvedEntry
-	for _, entry := range p.schedule {
-		for cursor := entry; cursor != nil; cursor = cursor.parent {
-			if cursor == root {
-				out = append(out, entry)
-				break
-			}
-		}
 	}
 	return out
 }
@@ -195,8 +114,6 @@ func (r *Registry) Validate(entries []Entry) (*Plan, error) {
 	plan := &Plan{
 		byID:       make(map[string]*resolvedEntry),
 		moduleInfo: make(map[string]*moduleDef),
-		consumers:  make(map[string][]string),
-		providerOf: make(map[string]string),
 	}
 	issues := make([]string, 0)
 
@@ -266,7 +183,6 @@ func (r *Registry) Validate(entries []Entry) (*Plan, error) {
 				continue
 			}
 			providers[provider.Name] = providerRef{typ: provider.Type, from: entry.entry.ID}
-			plan.providerOf[provider.Name] = entry.entry.ID
 		}
 	}
 
@@ -303,7 +219,6 @@ func (r *Registry) Validate(entries []Entry) (*Plan, error) {
 			}
 			if !requirement.Optional {
 				edges[entry.entry.ID] = append(edges[entry.entry.ID], provider.from)
-				plan.consumers[requirement.Name] = appendUnique(plan.consumers[requirement.Name], entry.entry.ID)
 			}
 		}
 	}
@@ -479,15 +394,6 @@ func detectCycles(edges map[string][]string) []string {
 		}
 	}
 	return issues
-}
-
-func appendUnique(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
 }
 
 func sortedCopy(values []string) []string {

@@ -49,7 +49,7 @@
 | 运行期新增一个**未编译进二进制**的模块 | ❌ 必须重新构建 |
 | 加载非 Go 插件（Python/Node/Rust/Java…） | ❌（除非编译期写 adapter 包，由它管理外部进程；那已超出「纯编译期」定义） |
 | 不可信插件沙箱/权限隔离 | ❌（同二进制内所有模块同等可信；靠代码审查/供应链治理） |
-| 模块代码级热更新（换实现不重启进程） | ❌（只能实例级 dispose/recreate） |
+| 模块代码/配置热更新（不重启进程） | ❌（编译期路线；配置变更也走重启） |
 | 跨版本稳定 ABI | ❌（也不需要：全部静态链接） |
 | 单二进制、无运行时依赖、启动确定、可交叉编译 | ✅ 这是该路线最大的收益 |
 
@@ -174,15 +174,12 @@ Loader/Registry 也都是 per-host。**仍建议**：把 BlockingExecutor/orphan
 
 **问题**：内核 Context 派生后不可变；kernel 没有"把 fiber 移到另一个 parent"或"修改已有
 entry 的 isolate/intercept"的 API。任何需要重新注册 Context 结构的变更，本质上只能重建 fiber。
-**后果（若简单处理）**：reload 会丢失模块实例状态；entry 移动/组变更需要重建子树。
-**对策（已实现，见 §4.2）**：把 reload 拆成三条路径——
-① 纯配置变更走 `Update`（不重建、不触发依赖、状态零丢失，推荐默认）；
-② 需要重新注册的变更走 `Reload`（重建 fiber，但通过 Snapshot/Restore + 依赖闭包保持状态，
-   不满足条件时在动树之前报错，绝不静默丢状态）；
-③ `Recreate` 是显式状态丢失的重建，仅供调试/明确可丢状态的场景。
-**仍建议**：若未来需要 isolate/intercept 的原地热 patch：内核加"context factory + reparent"
-（复杂）或 Loader 做"双实例切换 + 原子绑定"（先建新、后停旧；当前 isolate scope 下可通过
-隔离上下文实现，但依赖闭包/服务可见性规则需要单独设计）。
+**对策（当前设计）**：不做进程内热更。配置变更 = 重启进程重新装配；entry 移动/组变更同样
+通过重启后的新配置生效。`loader` 不提供 Update/Reload/Recreate，避免模块作者背上状态迁移契约
+（设计决策见 §4.2/§6.1）。
+**仍建议**：若未来 isolate/intercept 需要原地 patch：内核加"context factory + reparent"
+（复杂）或独立可选包做"双实例切换 + 原子绑定"（先建新、后停旧）；那是产品级扩展，
+不是内核默认能力。
 
 ### I9. 服务之外的扩展点（P1）
 
@@ -198,8 +195,8 @@ entry 的 isolate/intercept"的 API。任何需要重新注册 Context 结构的
 - 不能运行时接入未编译模块（重新构建是契约的一部分）；
 - 模块全部可信（同进程、同二进制）；供应链风险靠 go.sum/vendor/审计；
 - 无模块级沙箱/配额策略（内核 L2 只有每 fiber 资源计数，不是安全边界）；
-- 模块代码热更新不可能；配置热更新只能重启实例（当前 update 总是重启；没有官方 4.1
-  的 effectiveConfig/commit/volatile）；
+- 模块代码/配置热更新均不可能（配置变更 = 重启进程；没有官方 4.1 的
+  effectiveConfig/commit/volatile，也不做）；
 - 二进制体积/启动链接成本随模块集增长 → 用 build tags/按产品拆 `main` 包；
 - 模块版本 = 构建版本；跨版本持久化配置要处理 unknown/removed module（预检已报 unknown，
   建议 loader 增加 migrate/ignore 策略）。
@@ -227,12 +224,12 @@ CI 中保证任何装配漏配/环/版本冲突在合并前失败。
 
 ## 4. 原型：`module` 包（已实现并通过测试）
 
-### 4.1 API 摘要
+### 4.1 API 摘要（启动装配）
 
 ```go
 // 编译期注册（Go 1.27 泛型方法：T 从描述符推断）
 registry := module.NewRegistry()
-registry.Register(
+_ = registry.Register(
     module.Define("app/db", func(ctx cordis.Context, cfg DBConfig) error {
         _, err := ctx.Provide(DBKey, openDB(cfg))
         return err
@@ -241,87 +238,53 @@ registry.Register(
         AddRequires(module.Requires(cordis.LoggerKey)).
         WithValidate(func(cfg DBConfig) error { /* ... */ return nil }))
 
-// 运行期装配（配置驱动）
+// 启动装配：配置可以来自代码，也可以来自 JSON 文件
 loader, err := module.Load(root, registry, []module.Entry{
     {ID: "database", Module: "app/db", Config: map[string]cordis.Value{"dsn": "..."}},
     {ID: "app", Module: "app/core", Children: []module.Entry{
         {ID: "http", Module: "app/http"},
     }},
 })
+// 或：loader, err := module.LoadFile(root, registry, "assembly.json")
 defer loader.Close()
-loader.MissingServices("http")              // Pending 原因
-loader.Update("database", newConfig)        // 原地更新配置：不重启 fiber、不触发依赖重算
-newInst, _ := loader.Reload("database")     // 状态保持的受控重建（Snapshot/Restore + 依赖闭包）
-loader.Recreate("database")                 // 显式接受状态丢失的重建（可选路径）
+loader.MissingServices("http")   // Pending 原因/排障
 
-// 文件驱动：
-loader, _ = module.LoadFile(root, registry, "assembly.json") // 读文件→解析→预检→Load
-report, _ := loader.ApplyFile("assembly.json")               // 配置变更→diff→应用
-watcher, _ := loader.WatchFile("assembly.json", module.WatchOptions{
-    Interval: 200 * time.Millisecond,
-    OnChange: func(report *module.ReloadReport, err error) { /* ... */ },
-})
-defer watcher.Stop()
+// L0 崩溃契约（模块自己的 goroutine）
+module.SetPanicHandler(func(r module.PanicReport) { /* 告警/指标 */ })
+module.SafeGo("app/ticker", func() { /* ... */ })
 ```
 
-关键语义：
+关键语义（仅启动期）：
 
-- `Load` 先 `Validate`（零 fiber 创建），再按 provider-first 调度创建，最后静默/校验；
+- `Load`/`LoadFile` 先 `Validate`（零 fiber 创建），再按 provider-first 调度创建，最后静默/校验；
 - required 失败 → 全树回滚 + `*LoadError`；optional 失败 → 保留 + warning；
-- `Close` 逆序 dispose（child fiber 级联）；`Reload` 保留 entry ID、重建子树；
-- 内置契约：kernel root 的 `logger` 自动声明为 builtin provider，可 `AddBuiltin` 扩展。
+- `Close` 逆序 dispose（child fiber 级联）；
+- 内置契约：kernel root 的 `logger` 自动声明为 builtin provider，可 `AddBuiltin` 扩展；
+- **没有** `Update/Reload/ApplyFile/WatchFile`：配置变更 = 用新配置重启进程（见 §4.2）。
 
-### 4.2 状态保持的配置更新与 reload（针对「不接受状态丢失」的设计）
+### 4.2 热配置更新已移除（刻意简化）
 
-用户约束：**不接受 “reload = 实例级重启（状态丢失）”**。因此 loader 区分三种操作：
+早期原型实现过 `Update`（原地配置更新）、`Reload`（Snapshot/Restore + 依赖闭包）、
+`ApplyFile` diff 热重载与 `WatchFile` 轮询。**现已全部移除**，原因：
 
-| 操作 | fiber | 模块状态 | 依赖方 | 适用 |
-| --- | --- | --- | --- | --- |
-| `Update(entryID, cfg)` | **不重建** | 保持 | 不重算（kernel 服务版本不变） | 纯配置变更（推荐默认） |
-| `Reload(entryID)` | 重建（entry ID 不变） | **Snapshot/Restore 保持** | 自动纳入依赖闭包并保持状态 | 需要重新注册资源/effect 的变更 |
-| `Recreate(entryID)` | 重建 | 丢失（显式选择） | 依赖方因版本变化重算 | 明确可丢状态/调试用 |
+1. **不是正确性需求**：编译期路线下改代码本来就必须重新构建+重启，热更新只能省「仅改配置」
+   的重启；多数 Go 服务/CLI 都能接受重启。
+2. **成本落在模块作者**：`Update`/`Snapshot`/`Restore` 是每个模块都要理解并维护的契约；
+   loader 还要处理依赖闭包、部分失败、状态迁移、文件监听竞态。
+3. **官方也不在 core 里做**：`cordis` core 没有配置/loader；它是 `cordis-plugin-loader`
+   生态包在 Node 运行时的能力。Go 静态链接路线没有理由默认背上这套复杂度。
+4. **失败语义更难**：热重载的运行时失败会导致部分应用，反而降低「启动即确定」的可靠性。
 
-**Update（原地更新）**
+因此默认产品路径是：**启动时 `LoadFile` → 运行 → 改配置/改代码都走重启**。如果未来某个
+长稳产品确实需要「不停服改配置」，应以**独立可选包**（如 `module/hotconfig`）重新引入，
+并明确要求相关模块实现更新契约；不要让所有模块默认背上热更 API。
 
-```
-decode+Validate(candidate) → module.Update(ctx, oldCfg, newCfg) → 更新 entry/raw config
-```
+### 4.3 启动配置文件（typed config 如何交付）
 
-- 不调用 kernel 的 `Fiber.Update`，因此不触发 service version bump、不重算 dependents；
-- 模块必须在 `Update` 中就地应用配置；**对外服务句柄必须稳定**（mutate 已有对象/接口，
-  不要替换 service 值），否则依赖方持有的旧句柄会看到旧状态（见风险 R2）；
-- 无 `Update` hook → 返回 `ErrUpdateUnsupported`，**绝不静默重启**；
-- 验证失败/模块拒绝 → 旧配置、旧状态保持不变（模块需自行保证 Update 的原子性）。
-
-**Reload（状态保持重建）**
-
-1. 计算 **reload closure**：entry 子树 + 所有（传递地）required-inject 了该子树所提供服务的
-   loader-managed entry（否则 kernel 的 provider 版本变化会把它们重新激活、丢状态）；
-2. 校验：闭包全部实例必须 Active，且每个模块都实现 Snapshot/Restore；否则**在动任何东西之前**
-   返回 `ErrReloadNotStateful`（旧树保持不变）；
-3. 快照：按 parent-first 加载顺序调用 `Snapshot`（此时旧实例与依赖都还活着）；任一失败 → 中止，
-   旧树不变；
-4. 逆序 dispose 闭包根（child 级联），按 provider-first 调度重建闭包；
-5. 按 parent-first 顺序 `Restore`；随后 WhenIdle + 状态/清单校验；
-6. 任一步失败 → 拆除新实例并返回错误（旧实例已释放，文档标注该失败路径状态丢失）。
-
-**边界与已知限制**
-
-- closure 只覆盖 loader 管理的 entry；模块内部用 `ctx.Plugin` 动态创建的子 fiber 不在闭包内，
-  它们会随父卸载但不会被快照恢复（模块应避免把关键状态放在动态子 fiber，或自行持久化）。
-- Snapshot/Restore 是内存态、同一进程；不做序列化/跨进程迁移。
-- 代码级热更新仍不可能（编译期路线的定义），Reload 只是“实例重建 + 状态迁移”；
-- `Instance` 句柄会随 Reload 更新（entry ID 稳定，fiber/uid 变化）；宿主应以 entry ID 为键；
-- 服务句柄稳定性是 Update 正确性的前提：推荐模块只 `Provide` 一次 long-lived 对象，
-  配置变更后 mutate 其内部字段，而不是重新 provide 新对象。
-
-### 4.3 配置文件与热重载（配置如何传给模块、变更如何送达）
-
-**先澄清层级**：内核根包（`cordis`）本身没有「内核配置文件」——内核只有 context/fiber/service/event;
-logger 之类的内核服务配置通过 `ctx.Intercept("logger", ...)` / 根模块提供。**装配配置文件属于
-可选的 `module` 宿主层**：它描述「加载哪些模块实例、各自的配置、树形结构」，并且可以把每个
-entry 的 `config` 以 **typed config** 交给对应模块。`module` 包作为宿主层允许使用标准库
-`os`/`encoding/json`（内核根包仍保持无 IO、可被任何宿主复用）。
+**层级**：内核根包 `cordis` 没有全局配置文件（内核不做 IO；logger 等配置走
+`ctx.Intercept("logger", ...)` / 根模块）。装配配置属于可选的 `module` 宿主层，描述「加载哪些
+模块实例、各自配置、树形结构」。`module` 包允许使用标准库 `os`/`encoding/json`，内核根包
+仍保持无 IO、可被任何宿主复用。
 
 **文件格式（严格 JSON，unknown field 报错；也接受裸数组）**
 
@@ -338,42 +301,11 @@ entry 的 `config` 以 **typed config** 交给对应模块。`module` 包作为�
 ```
 
 - `ParseConfig([]byte)` / `LoadConfigFile(path)` / `LoadFile(ctx, registry, path)`；
-- 配置在**预检阶段**解码为模块的 `T`（`Descriptor[T]` + `decode/Validate`），启动后模块拿到的
-  是类型化配置；配置错误在创建 fiber 之前报错；
-- 配置变更时 `Loader.Update(id, raw)`/文件热重载会把 **old/new 两个 typed config** 交给模块的
-  `Update(ctx, old, new)`；`Reload` 重建时 Factory 收到新 typed config，`Snapshot/Restore` 负责状态迁移；
-- YAML/TOML 等格式：`module` 包不引入第三方解析器；宿主自己解析后构造 `[]module.Entry` 调用
-  `Load/ApplyEntries` 即可（或后续加可插拔 `Parser` hook）。
-
-**热重载（`ApplyFile` / `WatchFile`）**
-
-`WatchFile` 用标准库轮询（默认 500ms，可配），内容变化 → `ParseConfig` → `ApplyEntries` →
-`OnChange(report, err)`；宿主若有 fsnotify 等事件源，可直接调用 `ApplyFile`，不必用轮询。
-
-`ApplyEntries` 的 diff 语义：
-
-| 变更 | 行为 |
-| --- | --- |
-| 配置变化 + 模块有 `Update` | **原地更新**：fiber 不变、依赖方不重算、状态保持（默认路径） |
-| 配置变化 + 模块无 `Update` | 默认 **拒绝**（`ApplyError`，不静默重启）；可用 `WithUpdateFallback(FallbackReload/FallbackRecreate)` 显式选择状态保持重建或状态丢失重建 |
-| 新增 entry | provider-first 调度创建；无历史状态 |
-| 删除 entry | 停止并释放（状态随删除消失，这是删除语义） |
-| disabled 翻转 | 等价于删除/新增 |
-| 仅 `optional` 等元数据变化 | 只更新元数据，不重建 |
-| entry ID 改 module / 改 parent | **拒绝**（entry ID 不可变；用删除+新 ID 新增，避免状态语义歧义） |
-| 配置解析/预检/策略错误 | **不修改运行中的树**（先全量预检+策略检查，再动手） |
-| 运行时失败（重建/启动/校验） | 返回 `ApplyError`，报告已完成的部分变更；文档标注此路径可能部分应用 |
-
-`ReloadReport.Changes` 用 `ChangeUpdated/ChangeReloaded/ChangeRecreated/ChangeAdded/ChangeRemoved/
-ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志/审计/告警。
-
-**边界**：
-
-- 热重载的是**配置与实例结构**，不是代码；编译期模块集的代码级热更新仍不可能；
-- 热重载后的 fiber/uid 会变化（entry ID 稳定）；宿主以 entry ID 为键，不缓存 `*Instance` 语义；
-- 对正在执行 `Update/Reload` 的条目，`ApplyEntries` 用 Loader 的 RWMutex 串行化，不会并发撕裂；
-- 轮询 watcher 有间隔延迟（默认 500ms），对毫秒级配置一致性有要求的宿主用事件源主动调用；
-- 若配置文件被外部破坏（非法 JSON/未知模块），Watcher 只回调错误并保留运行中的树，不会把系统打挂。
+- 每个 entry 的 `config` 在**预检阶段**解码为模块的 `T`（`Descriptor[T]` + decode/Validate），
+  模块 Factory 启动时收到 typed config；配置错误在建 fiber 之前报错；
+- 配置变更：**重启进程**，重新 `LoadFile`；没有进程内监听/热更；
+- YAML/TOML：`module` 包坚持零第三方依赖，宿主可自行解析成 `[]module.Entry` 后调用
+  `Load`；需要时再加可插拔 Parser hook。
 
 ### 4.4 测试覆盖（`go test -race ./module/`，连续多轮通过）
 
@@ -386,24 +318,12 @@ ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志
 | optional 缺失/present；optional 实例失败保留 + warning | ✅ |
 | required 失败整体回滚（0 fiber 残留） | ✅ |
 | 清单声明了服务但实际没提供 | ✅ 运行时校验报错 |
-| reload 保留 entry ID、新 fiber、旧实例 Disposed | ✅ |
 | provider 运行时被停 → 依赖方自动 Pending + MissingServices | ✅ |
 | 多宿主/多 registry 隔离 | ✅ |
 | 未声明的 builtin → Load 失败 | ✅ |
-| 原地配置更新：fiber 不变、服务句柄不变、模块状态与依赖激活次数不变 | ✅ |
-| 无 Update hook → `ErrUpdateUnsupported`（不静默重启） | ✅ |
-| 非法配置更新 → 旧配置/旧状态不变 | ✅ |
-| Reload 自动包含依赖闭包，provider+dependent 状态经 Snapshot/Restore 保持 | ✅ |
-| 依赖方缺 Snapshot/Restore → `ErrReloadNotStateful` 且旧树不变 | ✅ |
-| Snapshot 失败 → 中止且旧树不变 | ✅ |
 | 配置文件解析（对象/裸数组/严格字段/版本）→ LoadFile 把 typed config 交给模块 | ✅ |
-| ApplyFile 配置变更：有 Update → 原地更新（fiber/服务/状态不变） | ✅ |
-| 无 Update + 默认策略 → ApplyError 且旧树不变 | ✅ |
-| FallbackRecreate/FallbackReload：显式重建 / 状态保持重建 | ✅ |
-| 配置增删 entry（disabled 翻转同）→ 报告 added/removed，运行树同步 | ✅ |
-| 非法配置/预检失败 → 运行树不变 | ✅ |
-| WatchFile 轮询检测文件变更并触发 Update | ✅ |
 | 注册表重复注册/非法描述符 → error | ✅ |
+| SafeCall/SafeGo panic 遏制 + PanicHandler 上报 | ✅ |
 
 > 原型刻意**不改内核**：所有模块系统语义都在 `module` 包完成。这验证了内核对上层扩展的
 > 友好度，也把「内核该不该变大」的决策留到后面。
@@ -414,23 +334,20 @@ ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志
 | --- | --- |
 | `EntryTree`（id/name/config/group/disabled） | `Entry` 树（ID/Module/Config/Children/Disabled/Optional） |
 | 模块按名 import（ESM 运行时） | 编译期 `Registry.Register`（显式 assembly；无动态加载） |
-| `create/update/remove/await/locate` | `Load/ApplyEntries/Reload/Recreate/Close/Instances/Locate` |
-| **配置文件 + include**：`plugin-loader` 从配置树加载，`plugin-include` 支持 YAML/JSON 拆分 | **JSON 装配文件已实现**：`ParseConfig/LoadFile/ApplyFile`（严格 JSON、typed config、diff 热重载）；YAML/TOML 由宿主解析后传 `[]module.Entry`（或未来 Parser hook）；include 拆分未实现 |
+| `create/update/remove/await/locate` | `Load/Close/Instances/Locate`（启动装配；无运行期 update/reload） |
+| **配置文件 + include**：`plugin-loader` 从配置树加载，`plugin-include` 支持 YAML/JSON 拆分 | **JSON 启动配置已实现**：`ParseConfig/LoadFile`（严格 JSON、typed config）；**无热重载、无 include**；YAML/TOML 由宿主解析后传 `[]module.Entry` |
 | group（嵌套子模块组） | `Entry.Children` 树（基础嵌套；官方 group 的加载/卸载/配置语义未完全对齐） |
-| HMR（ESM 模块热替换） | **不适用**（编译期路线无代码热更新）；配置/实例热重载已实现（`ApplyFile/WatchFile`） |
+| HMR（ESM 模块热替换） | **不适用**（编译期路线无代码热更新；也刻意不做配置热重载，变更走重启） |
 | `await/locate` 完成与定位 | `WhenIdle` 静默校验、`Loader.Locate` |
 | `inject` 覆盖 / `loader/patch-context` | 暂未实现（entry 级 isolate/intercept 是 P1） |
-| volatile config / `internal/commit` | 未实现（依赖内核 4.1 配置语义）；当前用 `Update`（通常不重启）或 `Reload`（状态迁移重建）替代 |
-| 配置变更 `update` 的实例保留 | 官方通过 `internal/update` waterfall + 4.1 `internal/commit`/effectiveConfig 保留实例；本仓库用模块 `Descriptor.Update` 实现同等“原地更新”目标 |
+| volatile config / `internal/commit` | 不适用：没有热配置更新；配置变更 = 重启进程 |
 
 > **结论：没有重复造 core。** 官方把「加载器/配置树/HMR」放在 `cordis-plugin-loader` /
 > `plugin-include` / `plugin-group` / `plugin-hmr` 等独立生态包里，`cordis` core 只做
 > context/fiber/service/events/logger/reflect；Rust 参考也明确把 loader 归为宿主责任。
-> `module` 包在 Go/静态链接路线下承担的是**官方 loader 生态的对应层**，并额外提供官方没有的
-> 编译期类型化清单/预检、required/optional 失败策略与回滚、状态保持 Update/Reload 契约。
-> 真正需要避免的“做重”只有两种：把 loader 功能塞进 core（本仓库没有），或同时维护两套
-> 配置更新机制（将来若把官方 4.1 的 `internal/commit` 语义下沉到内核，应让 module 的
-> `Update` 委托内核 commit，而不是各做一套）。
+> `module` 包在 Go/静态链接路线下承担的是**官方 loader 生态的最小子集**（编译期注册表 +
+> 启动配置 + 预检 + 失败策略），并额外提供官方没有的编译期类型化清单/预检与 L0 崩溃契约。
+> 热配置更新被明确排除在默认设计之外（见 §4.2/§6.1），避免“做重”。
 
 ---
 
@@ -456,50 +373,32 @@ ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志
    内核外解决，但**团队必须把清单当契约维护**（清单撒谎由运行时校验兜底）。
 3. **信任边界风险**：同二进制模块全可信；一旦要接不可信第三方，必须回到进程/WASM 隔离，
    此时编译期注册表只能作为控制面，不能作为隔离边界。
-4. **状态保持的实现风险（新增）**：`Update` 要求模块**稳定对外服务句柄**（原地 mutate，
-   不重新 provide），否则依赖方持有旧句柄；`Reload` 要求模块实现 Snapshot/Restore 且覆盖
-   依赖闭包，闭包外的动态子 fiber 不在保护范围。也就是说“不丢状态”是**模块契约责任**，
-   loader 只能做到“不支持的模块直接报错，绝不静默丢失”。需要在模块模板/评审清单中强制。
-5. **演化风险**：模块配置/服务契约随版本演进；没有 contract 包/版本规则 + 配置迁移，
+4. **演化风险**：模块配置/服务契约随版本演进；没有 contract 包/版本规则 + 配置迁移，
    跨版本组合会失控。编译期类型检查只能覆盖代码内契约，覆盖不了持久化配置。
-6. **配置热重载的运行时风险（新增）**：文件监听延迟/半写文件/外部编辑冲突、运行时失败导致的部分应用、
-   watcher 与宿主其它事件源的并发——`ApplyEntries` 已做预检原子性与锁串行化，但"文件内容"本身是
-   不可信输入，宿主应对 `ApplyError` 做告警/回滚策略；配置审计与版本化建议由宿主保存。
-7. **工程复杂度风险**：每个外部插件系统仍要写 Go adapter（即使纯编译期，也要适配其
-   API/生命周期/错误模型，包括 Update/Snapshot 契约）；这不是内核能消除的成本。
+5. **工程复杂度风险**：每个外部插件系统仍要写 Go adapter（即使纯编译期，也要适配其
+   API/生命周期/错误模型）；这不是内核能消除的成本。
 
 ### 5.3 建议的下一步（在这个路线内）
 
 | 优先级 | 事项 | 说明 |
 | --- | --- | --- |
-| P0 | 把 `module` 包从原型硬化 | 已实现 Update/Reload/Recreate、状态保持、JSON 配置文件、ApplyFile diff 热重载、WatchFile 轮询；下一步：错误类型/API 稳定、文档、示例、CI，YAML 可插拔解析、entry 级 isolate/intercept、配置持久化/审计钩子 |
+| P0 | 把 `module` 包从原型硬化 | 已实现编译期注册表、预检、启动装配、JSON 启动配置、L0 崩溃契约；热配置更新已刻意移除（重启更新）。下一步：错误类型/API 稳定、文档、示例、CI，entry 级 isolate/intercept |
 | P0 | **ExtensionPoint[T]/Contribution[T] 工具** | 让模块贡献命令/工具/路由等集合项，统一所有权/顺序/冲突 |
 | P0 | 产品装配测试模板 | 每个产品的 entry 配置在 CI 里跑 `Validate`；防止漏配/环/未知模块 |
 | P1 | build tags / 多产品 assembly 模板 | 按产品拆 main + 模块集，控制二进制体积与攻击面 |
 | P1 | 契约包规范（contracts/v1）+ 版本兼容规则 | 服务 key、事件名、配置结构、版本范围 |
 | P1 | 内核只读诊断 API | `Fiber.PendingOn`、`Registry.Providers`，减少 loader 重算 |
-| P2 | `internal/commit`/effectiveConfig/volatile | 只有需要"配置热更不重启"时再做 |
-| P2 | HMR/文件监听 | 宿主层 fsnotify；Go 只能实例级重启，不能换代码 |
+| P2 | `internal/commit`/effectiveConfig/volatile | 不做；配置变更走重启（若未来长稳产品确有“不停服改配置”需求，再作为独立可选包评估） |
 | P2 | 进程外/WASM adapter | 仅当确实需要非 Go/不可信插件时（另一条路线，不是本路线的必需项） |
 
-## 6. 热重载真的需要吗？崩溃隔离到哪一层？
+## 6. 崩溃隔离到哪一层（热重载已移除）
 
-### 6.1 热重载不是“正确性需求”，是“运维需求”
+热配置更新已按决策移除（§4.2）：编译期路线下代码变更必须重新构建+重启，配置变更也走重启，
+因此默认产品没有“运行中改配置”的路径，也就不需要模块的 Update/Snapshot/Restore 契约。
+如果未来某个长稳产品确有“不停服改配置”的硬需求，应以**独立可选包**重新引入，并在那个包的
+边界内定义模块更新契约；不要把它塞回默认 `module` API。
 
-先给判定框架，而不是默认全上：
-
-| 场景 | 需要配置热重载吗 | 建议 |
-| --- | --- | --- |
-| 配置变更极少、发布即重启（CLI/桌面/短生命周期服务） | 不需要 | 启动时 `LoadFile`，变更走进程重启；禁用 `WatchFile` |
-| 长生命周期服务/Agent，配置调优/开关变更不想断连 | 需要 | 用 `ApplyFile`（手动触发或发布系统调用），`Update` 原地路径；不要求所有模块支持 |
-| 模块有昂贵状态（连接池/缓存/长任务），重启代价高 | 需要 | `Update` 原地 + 关键模块 `Snapshot/Restore` |
-| 多产品共享二进制、运维希望“改配置不动进程” | 需要 | 配置文件 + diff 热重载；`ApplyError` 接告警/审计 |
-| 需要改代码 | **无法热更新**（编译期路线） | 重新构建 + 进程重启；不要试图用 HMR 掩盖 |
-
-结论：**保留现有热重载能力（已实现、零依赖、可选启用），但不要继续扩张成 loader 生态**
-（YAML include、group、代码 HMR、volatile config 等按需再说）。默认产品可以只做启动时读配置；
-`WatchFile` 只给确实需要长稳运行的产品开。热重载与崩溃隔离是正交的——进程重启本身就是最强的
-崩溃隔离手段，不需要为了隔离去上热重载。
+崩溃隔离仍是需要明确的边界，见 §6.2/§6.3。
 
 ### 6.2 崩溃隔离：内核能兜住什么、兜不住什么
 
@@ -519,7 +418,7 @@ ChangeMetadata` 精确报告每个 entry 发生了什么，宿主可以记日志
 
 ```go
 module.SetPanicHandler(func(r module.PanicReport) {
-    // 上报指标/告警，决定 Recreate/Reload/隔离该模块
+    // 上报指标/告警，决定重启进程或做 L1 进程隔离
 })
 module.SafeGo("app/ticker", func() { ... })   // 模块自己的 goroutine 必须用这个
 module.SafeCall("app/callback", func() { ... }) // 第三方回调场景
@@ -529,7 +428,7 @@ module.SafeCall("app/callback", func() { ... }) // 第三方回调场景
 - 模块自己的 goroutine 一律 `module.SafeGo`，不用裸 `go func(){}`；（CI 可用 go/ast 扫描 `go` 语句）
 - 模块不调用 `os.Exit`/`log.Fatal`/`panic`（fatal 边界）；
 - 模块把“无法继续”的错误返回给 kernel/loader，而不是静默死循环；
-- 有昂贵状态的模块实现 `Snapshot/Restore`；能原地变更的实现 `Update`。
+- 模块契约不包含热更新钩子（Update/Snapshot/Restore 已移除）。
 
 ### 6.3 隔离级别（按信任边界选，不是全都要）
 
@@ -547,5 +446,6 @@ module.SafeCall("app/callback", func() { ... }) // 第三方回调场景
 **最终判断**：作为一个「Go 生态内、多产品共享、静态链接、可配置组合」的内核，**设计思想
 核心是成立的**；真正需要在设计阶段定死的不是内核，而是模块系统的三件事：
 **清单契约（provides/requires/config）**、**预检与失败策略**、**实例身份与装配纪律**。
-这三件在 `module` 原型里已经跑通。至于热重载：保留为**可选运维能力**，不是内核必需；
-崩溃隔离：L0 的 panic 边界 + 模块契约够用，硬隔离需求出现时再加 L1 进程层，不必现在做。
+这三件在 `module` 原型里已经跑通。**热配置更新已刻意移除**（配置变更=重启），默认设计回到
+「启动装配 + 重启更新」，避免给所有模块增加热更契约；崩溃隔离：L0 的 panic 边界 + 模块契约
+够用，硬隔离需求出现时再加 L1 进程层，不必现在做。

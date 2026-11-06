@@ -4,7 +4,7 @@
 
 > 这是 **Go 重实现**，上游是纯 Rust 的 [zeokeel/zeokeel-cordis](https://github.com/zeokeel/zeokeel-cordis)（v0.6.0，MIT）。上游仓库的完整源码已作为只读参考放在 [`reference/zeokeel-cordis-rust/`](reference/zeokeel-cordis-rust/) 下，用于逐项对照语义。
 >
-> 这是**内核**，不是框架：只提供组合原语与生命周期语义。模块加载、热更新、权限、沙箱、进程/WASM 隔离都属于使用它的宿主（embedder）。
+> 这是**内核**，不是框架：只提供组合原语与生命周期语义。模块加载/装配、热更新（若产品需要）、权限、沙箱、进程/WASM 隔离都属于使用它的宿主（embedder）。
 
 | | 状态 |
 | --- | --- |
@@ -139,7 +139,7 @@ go run ./examples/async_plugin
 | 内部 hook | `ctx.OnInternal{Plugin,Status,Service,Config,Update,Get,Set,Listener,Dispatch}`、`ctx.OnLifecycle` |
 | 日志 / 配置 / 时钟 | `ctx.Logger()`、`ctx.LogExporter()`、`cordis.NewJsonConfigSchema()`、`ctx.ResolveConfig`、`ctx.Accessor`、`ctx.SetClock` |
 | 监督（L2） | `cordis.FiberQuota`、`registry.SetQuota`、`fiber.Heartbeat/IdleFor`、`registry.StalledFibers`、`cordis.DetectIsolationCapabilities` |
-| 编译期模块注册表（可选宿主层） | `module.NewRegistry()`、`registry.Register(module.Define(...))`、`module.Load(root, registry, entries)`、`Loader.{Instances,Instance,Locate,Reload,Close,MissingServices,Warnings}` |
+| 编译期模块注册表（可选宿主层） | `module.NewRegistry()`、`registry.Register(module.Define(...))`、`module.Load/LoadFile`、`Loader.{Instances,Instance,Locate,Close,MissingServices,Warnings}`、`module.SafeGo/SafeCall/SetPanicHandler` |
 
 typed 服务读写是 **Go 1.27 泛型方法**，类型参数从 `ServiceKey[T]` 自动推断，写法与 Rust 参考的
 `ctx.get(KEY)` 一致（包级泛型函数保留为便捷包装）：
@@ -195,36 +195,32 @@ defer loader.Close()
 
 `Load` 做三件事：**预检**（缺 provider / 重复 provider / 类型不匹配 / required 环 / 坏配置，
 创建 fiber 前一次性报全）→ **provider-first 调度创建**（parent/child 树 + typed config）→
-**静默校验**（required 失败整体回滚，optional 失败保留并 warning）。entry ID 跨 reload 稳定。
+**静默校验**（required 失败整体回滚，optional 失败保留并 warning）。entry ID 用于 `Locate/Instance`。
 
-配置与状态语义：`loader.Update(id, cfg)` 原地更新（不重建 fiber、不触发依赖重算，模块实现
-`WithUpdate` 且对外服务句柄稳定）；`loader.Reload(id)` 状态保持重建（`Snapshot/Restore` +
-自动依赖闭包，不满足条件时在动树之前报错）；`loader.Recreate(id)` 才是显式状态丢失。也就是
-**默认路径不丢状态，丢状态必须显式选择**。配置可直接来自 JSON 装配文件并热重载：
+配置可以来自 JSON 装配文件，在**启动时**读取并解码为每个模块的 typed config：
 
 ```go
-loader, err := module.LoadFile(root, registry, "assembly.json") // 解析→预检→加载
-report, err := loader.ApplyFile("assembly.json")                // 文件变更→diff→应用（Update 原地）
-watcher, err := loader.WatchFile("assembly.json", module.WatchOptions{Interval: 200 * time.Millisecond})
-defer watcher.Stop()
+loader, err := module.LoadFile(root, registry, "assembly.json") // 解析→预检→装配
 ```
+
+**刻意不做进程内热配置更新**：编译期路线下改代码本来就要重新构建+重启，配置变更也走“新配置
+重启进程”这一条路径即可；这样模块作者不需要维护 `Update/Snapshot/Restore` 契约，也不会出现
+热重载部分失败的半可用状态。如果未来某个长稳产品确有“不停服改配置”的硬需求，应以独立可选包
+重新引入，而不是放回默认 `module` API。
 
 模块自己的 goroutine 用 `module.SafeGo(name, fn)` 启动（`module.SetPanicHandler` 上报），
 避免裸 `go func()` 里的 panic 打崩进程；这是进程内能做的崩溃隔离，fatal/OOM/死循环仍需
 进程 supervisor（详见 COMPILE-TIME-REGISTRY §6）。
 
-`assembly.json` 的每个 entry 的 `config` 在预检阶段解码为模块的 typed config 再交给模块；
-`ApplyEntries/ApplyFile` 做 diff：配置变化优先原地 Update（状态保持），无 Update 的模块默认报错、
-可显式选择状态保持 Reload 或状态丢失 Recreate；新增/删除模块、disabled 翻转会报告 `ChangeAdded/
-ChangeRemoved`；非法配置/预检失败不触碰运行中的树。内核根包本身没有全局配置文件（内核不做 IO），
-装配文件属于 `module` 宿主层。这是 **link-time composition**：模块随宿主编译，运行期只做
-实例/配置/树组合与配置热重载，不做代码热加载。
+内核根包本身没有全局配置文件（内核不做 IO），装配文件属于 `module` 宿主层。这是
+**link-time composition**：模块随宿主编译，运行期只做实例/配置/树组合；改配置或改代码都通过
+重启生效，不做代码热加载。
 
 ## 内核 / 宿主边界
 
 **内核负责**：context/作用域、服务注入、fiber 生命周期、effect 所有权与回滚、事件、配置 schema、日志、静态插件注册表。
 
-**宿主负责**：模块加载器与热更新、定时器/事件循环、权限与审计、资源配额策略、线程/fd 计量、进程隔离（L3）或 WASM 沙箱（L4）、UI/产品契约。
+**宿主负责**：模块加载器/装配（当前 `module` 可选层）、定时器/事件循环、权限与审计、资源配额策略、线程/fd 计量、进程隔离（L3）或 WASM 沙箱（L4）、UI/产品契约；进程内热配置更新刻意不做（配置变更走重启）。
 
 内核只依赖 Go 标准库；边界由 [`internal/archtest`](internal/archtest) 的架构测试在 CI 中强制（禁止 `net`/`os`/`io`/`unsafe`/第三方依赖等），对应上游 `tests/kernel_boundary.rs` 的思路。
 
@@ -243,7 +239,7 @@ make ci      # check + build + test
 当前基线（本地实测）：
 
 - `go test ./...`：内核根包（56 个 smoke/edge/API 测试）+ `conformance/lifecycle`（67）、
-  `conformance/services`（36）、`conformance/runtime`（51）+ `module`（34 个装配/配置热重载/崩溃隔离测试）+
+  `conformance/services`（36）、`conformance/runtime`（51）+ `module`（21 个装配/启动配置/崩溃隔离测试）+
   `internal/archtest`（2）全部通过
 - `go test -race ./...`：通过；并发/异步/生命周期用例 `-count=5..20` 稳定
 - 合并覆盖率 **约 80%**（`go test -coverpkg=github.com/zeokeel/cordis-go -coverprofile ... . ./conformance/...`）
