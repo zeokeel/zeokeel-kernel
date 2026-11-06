@@ -70,6 +70,13 @@ func (s *asyncDisposeState) claim() bool {
 	s.done.Store(false)
 	s.cancelled.Store(false)
 	s.mu.Lock()
+	// Waiters of a previous attempt must not be left on an orphaned channel:
+	// the finish/cancel that released this claim may be racing with the new
+	// claim, so close the old channel here before installing the fresh one.
+	if s.ch != nil {
+		close(s.ch)
+		s.ch = nil
+	}
 	s.ch = make(chan struct{})
 	s.mu.Unlock()
 	return true
@@ -101,6 +108,11 @@ func (s *asyncDisposeState) waitChan() <-chan struct{} {
 	defer s.mu.Unlock()
 	if s.ch == nil {
 		s.ch = make(chan struct{})
+		// A teardown that already completed must not make a late joiner wait
+		// forever for a wake-up that already happened.
+		if s.done.Load() && !s.claimed.Load() && !s.cancelled.Load() {
+			close(s.ch)
+		}
 	}
 	return s.ch
 }

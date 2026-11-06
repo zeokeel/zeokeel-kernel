@@ -624,3 +624,161 @@ func TestAsyncDisposerSelfJoinFromCleanup(t *testing.T) {
 		t.Fatal("cleanup did not run to completion")
 	}
 }
+
+func TestDisposeDuringApplyWins(t *testing.T) {
+	root := cordis.Root()
+	defer disposeAllQuietly(root)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var live *cordis.Fiber
+	if _, err := root.OnInternalPlugin(func(f *cordis.Fiber) {
+		mu.Lock()
+		live = f
+		mu.Unlock()
+	}); err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	applyDone := make(chan struct{})
+	go func() {
+		defer close(applyDone)
+		_, _ = root.Plugin(&funcPlugin{name: "slow", activate: func(ctx cordis.Context) error {
+			close(started)
+			<-release
+			// Registrations made after a concurrent dispose are rejected; a
+			// plugin may observe the error and unwind.
+			_, _ = ctx.Effect(func() cordis.Effect {
+				return cordis.Effect{cordis.CleanupOf(func() {})}
+			})
+			return nil
+		}}, nil)
+	}()
+	<-started
+	mu.Lock()
+	fiber := live
+	mu.Unlock()
+	if fiber == nil {
+		t.Fatal("internal/plugin hook did not observe the fiber")
+	}
+	if err := fiber.Dispose(); err != nil {
+		t.Fatalf("dispose during apply: %v", err)
+	}
+	if fiber.State() != cordis.Disposed {
+		t.Fatalf("state after dispose = %v, want Disposed", fiber.State())
+	}
+	close(release)
+	<-applyDone
+	// The late activation result must be discarded: still Disposed, not Active.
+	if fiber.State() != cordis.Disposed {
+		t.Fatalf("late activation resurrected the fiber: %v", fiber.State())
+	}
+}
+
+func TestAwaitSettledWaitsForActivation(t *testing.T) {
+	root := cordis.Root()
+	defer disposeAllQuietly(root)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var live *cordis.Fiber
+	if _, err := root.OnInternalPlugin(func(f *cordis.Fiber) {
+		mu.Lock()
+		live = f
+		mu.Unlock()
+	}); err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	pluginDone := make(chan struct{})
+	go func() {
+		defer close(pluginDone)
+		_, _ = root.Plugin(&funcPlugin{name: "settle", activate: func(cordis.Context) error {
+			<-release
+			return nil
+		}}, nil)
+	}()
+	var fiber *cordis.Fiber
+	waitFor(t, time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		fiber = live
+		return fiber != nil
+	}, "fiber observed")
+	settled := make(chan error, 1)
+	go func() { settled <- fiber.AwaitSettled() }()
+	select {
+	case err := <-settled:
+		t.Fatalf("AwaitSettled returned early: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-pluginDone
+	if err := <-settled; err != nil {
+		t.Fatalf("AwaitSettled: %v", err)
+	}
+	if fiber.State() != cordis.Active {
+		t.Fatalf("state = %v", fiber.State())
+	}
+}
+
+func TestFailedActivationAwaitSettledRethrows(t *testing.T) {
+	root := cordis.Root()
+	defer disposeAllQuietly(root)
+	fiber, err := root.Plugin(&funcPlugin{name: "settle-fail", activate: func(cordis.Context) error {
+		return cordis.PluginError("settle-fail", "config", "bad key")
+	}}, nil)
+	if err != nil {
+		t.Fatalf("plugin: %v", err)
+	}
+	settleErr := fiber.AwaitSettled()
+	if settleErr == nil {
+		t.Fatal("AwaitSettled should rethrow the activation error")
+	}
+	var structured *cordis.CordisError
+	if !errors.As(settleErr, &structured) || structured.Code() != cordis.CodePlugin {
+		t.Fatalf("settle err = %v, want structured Plugin error", settleErr)
+	}
+	if structured.PluginKind() != "config" {
+		t.Fatalf("plugin kind = %q", structured.PluginKind())
+	}
+}
+
+func TestAccessorSemantics(t *testing.T) {
+	root := cordis.Root()
+	defer disposeAllQuietly(root)
+	flag := false
+	if _, err := root.Accessor("computed", func(cordis.Context) cordis.ServiceValue {
+		if flag {
+			return "on"
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("accessor: %v", err)
+	}
+	if value, ok := root.GetNamed("computed"); ok || value != nil {
+		t.Fatalf("accessor get = %v/%v, want absent", value, ok)
+	}
+	flag = true
+	if value, ok := root.GetNamed("computed"); !ok || value != "on" {
+		t.Fatalf("accessor get = %v/%v, want on", value, ok)
+	}
+	// Read-only accessor rejects writes with AccessorReadOnly.
+	if err := root.SetNamed("computed", "x"); codeOf(err) != cordis.CodeAccessorReadOnly {
+		t.Fatalf("write err = %v, want AccessorReadOnly", err)
+	}
+	// A setter may reject the write with AccessorWriteRejected.
+	writeRoot := cordis.Root()
+	defer disposeAllQuietly(writeRoot)
+	if _, err := writeRoot.AccessorWithSetter("writable",
+		func(cordis.Context) cordis.ServiceValue { return "v" },
+		func(cordis.Context, cordis.ServiceValue) bool { return false },
+	); err != nil {
+		t.Fatalf("accessor: %v", err)
+	}
+	if err := writeRoot.SetNamed("writable", "new"); codeOf(err) != cordis.CodeAccessorWriteRejected {
+		t.Fatalf("write err = %v, want AccessorWriteRejected", err)
+	}
+}
+
+func codeOf(err error) cordis.ErrCode {
+	code, _ := cordis.CodeOf(err)
+	return code
+}

@@ -836,7 +836,6 @@ func (d *fiberData) beginUnload() *unloadBatch {
 	// still present, then the provider's own disposers remove it.
 	if ctx != nil {
 		batch.withdrew = (&Context{inner: ctx}).withdrawOwnerServices(d.id)
-		ctx.registry.Refresh()
 	}
 	return batch
 }
@@ -894,9 +893,12 @@ func (d *fiberData) cascadeDependents(asyncMode bool, ctx context.Context) {
 			if other.dependenciesSatisfied(*octx) {
 				continue
 			}
-			containedVoid("cordis::fiber", "dependent cascade unload", func() {
-				_, _ = other.unload(Pending, asyncMode, ctx)
-			})
+			octxValue := *octx
+			if !other.unloadForRefresh(octxValue, Pending, asyncMode, ctx) {
+				// The dependent's lifecycle slot is busy; a later refresh/dispose
+				// pass retries it instead of racing the in-flight operation.
+				continue
+			}
 			progressed = true
 		}
 		if !progressed {

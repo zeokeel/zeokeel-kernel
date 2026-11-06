@@ -222,7 +222,12 @@ func (a Accessor) read(c Context) (ServiceValue, bool) {
 		if a.Get == nil {
 			return result{}
 		}
-		return result{value: a.Get(c), ok: true}
+		// Go convention: a nil dynamic value means "property absent" (the Rust
+		// port maps accessor panics and Value::Null-like absence the same way).
+		if value := a.Get(c); value != nil {
+			return result{value: value, ok: true}
+		}
+		return result{}
 	})
 	return r.value, r.ok
 }
